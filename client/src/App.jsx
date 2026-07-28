@@ -123,19 +123,12 @@ function Topbar({ theme, onToggleTheme }) {
     return { path: acc, display: meta[acc]?.label || p };
   });
 
-  const upTo = meta[loc.pathname]?.upTo;
-
   return (
     <div className="topbar">
       {!isHome && (
         <button className="back-btn" onClick={() => navigate(-1)} title="Go back">
           ← Back
         </button>
-      )}
-      {upTo && (
-        <Link className="up-btn" to={upTo.path} title={`Up to ${upTo.label}`}>
-          ↑ {upTo.label}
-        </Link>
       )}
       <Link className="brand" to="/">⌂ Catalog</Link>
 

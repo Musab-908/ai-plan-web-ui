@@ -1,5 +1,5 @@
 import { Link, useParams, useSearchParams, useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useApi } from "./useApi";
 import { Status, CardGrid, DataTable, Bool, KV } from "./components";
 import { useCompare } from "./compareContext";
@@ -129,19 +129,17 @@ export function Dashboard() {
       <h1>AI Model & Plan Catalog</h1>
       <p className="subtitle">Explore companies, model providers, plans, sub-products, models and benchmarks.</p>
 
-      <nav className="dash-quicknav">
-        <Link to="/companies">Companies</Link>
-        <Link to="/providers">Providers</Link>
-        <Link to="/models">Models</Link>
-        <Link to="/plans">Plans</Link>
-        <Link to="/benchmarks">Benchmarks</Link>
-      </nav>
-
       <DashboardStats />
 
       <div className="dash-panels">
         <TopModelsLeaderboard />
       </div>
+      <p className="dash-attribution">
+        Intelligence Index scores sourced from{" "}
+        <a href="https://artificialanalysis.ai/" target="_blank" rel="noopener noreferrer">
+          Artificial Analysis
+        </a>.
+      </p>
     </div>
   );
 }
@@ -152,7 +150,7 @@ export function Companies() {
   return (
     <div>
       <h1>Companies</h1>
-      <p className="subtitle">Organizations in the catalog (listed separately from model providers).</p>
+      <p className="subtitle">Organizations that offer plans/bundles (listed separately from model providers — a company that's both appears in both lists).</p>
       <Status loading={loading} error={error} />
       <CardGrid
         items={data}
@@ -376,7 +374,6 @@ export function ModelDetail() {
               ["vs GPT-5.6 Sol", data.model.performance_vs_gpt_5_6_sol_pct != null ? `${data.model.performance_vs_gpt_5_6_sol_pct}%` : null],
               ["vs Fable 5", data.model.performance_vs_fable_5_pct != null ? `${data.model.performance_vs_fable_5_pct}%` : null],
               ["Data last updated", lastUpdated],
-              ["Notes", data.model.notes],
             ]} />
           </div>
           <h2>Benchmark Scores</h2>
@@ -764,6 +761,25 @@ export function ComparePage() {
   const getName = (item) => (type === "plan" ? item.plan.name : item.model.version_name);
   const getHref = (item) => (type === "plan" ? `/plans/${item.plan.plan_id}` : `/models/${item.model.model_id}`);
 
+  // Union of every benchmark that appears on any compared model, sorted by
+  // name — so each benchmark gets exactly one row and scores line up in the
+  // same row across columns, instead of each model showing its own
+  // independently-ordered list (which made side-by-side comparison hard).
+  const benchmarkRows = useMemo(() => {
+    if (type !== "model" || !items) return [];
+    const byId = new Map();
+    items.forEach((item) => {
+      (item.benchmarks || []).forEach((b) => {
+        if (!byId.has(b.benchmark_id)) {
+          byId.set(b.benchmark_id, { benchmark_id: b.benchmark_id, benchmark_name: b.benchmark_name });
+        }
+      });
+    });
+    return [...byId.values()].sort((a, b) =>
+      (a.benchmark_name || "").localeCompare(b.benchmark_name || "")
+    );
+  }, [items, type]);
+
   return (
     <div>
       <h1>Compare {type === "plan" ? "Plans" : "Models"}</h1>
@@ -795,24 +811,24 @@ export function ComparePage() {
                   ))}
                 </tr>
               ))}
-              {type === "model" && (
+              {type === "model" && benchmarkRows.length > 0 && (
                 <tr>
-                  <td className="compare-row-label">Benchmark scores</td>
-                  {items.map((item) => (
-                    <td key={getHref(item)}>
-                      {item.benchmarks?.length > 0 ? (
-                        <ul className="compare-benchmark-list">
-                          {item.benchmarks.map((b) => (
-                            <li key={b.benchmark_id}>
-                              <Link to={`/benchmarks/${b.benchmark_id}`}>{b.benchmark_name}</Link>: {b.score_value ?? "—"}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : "—"}
-                    </td>
-                  ))}
+                  <td className="compare-row-label compare-row-section" colSpan={items.length + 1}>
+                    Benchmark scores
+                  </td>
                 </tr>
               )}
+              {type === "model" && benchmarkRows.map((bRow) => (
+                <tr key={bRow.benchmark_id}>
+                  <td className="compare-row-label">
+                    <Link to={`/benchmarks/${bRow.benchmark_id}`}>{bRow.benchmark_name}</Link>
+                  </td>
+                  {items.map((item) => {
+                    const match = item.benchmarks?.find((b) => b.benchmark_id === bRow.benchmark_id);
+                    return <td key={getHref(item)}>{match?.score_value ?? "—"}</td>;
+                  })}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

@@ -32,10 +32,24 @@ app.get("/api/dashboard", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ---------- Companies (separate from providers, list twice if both) ----------
+// ---------- Companies (only ones offering plans/bundles; separate from
+// providers; a company that's both a plan-offering company and a model
+// provider still appears in both lists) ----------
 app.get("/api/companies", async (req, res, next) => {
   try {
-    res.json(await q(`select * from ${S}.companies order by name`));
+    res.json(
+      await q(
+        `select c.*
+         from ${S}.companies c
+         where exists (
+           select 1
+           from ${S}.brands b
+           join ${S}.plan_records p on p.brand_id = b.brand_id
+           where b.company_id = c.company_id
+         )
+         order by c.name`
+      )
+    );
   } catch (e) { next(e); }
 });
 
@@ -151,8 +165,11 @@ app.get("/api/plans", async (req, res, next) => {
   try {
     res.json(
       await q(
-        `select * from ${S}.plan_records
-         order by base_price_usd_monthly asc nulls last, name`
+        `select p.*,
+                (select count(*) from ${S}.plan_features pf where pf.plan_id = p.plan_id) as feature_count,
+                (select count(*) from ${S}.plan_features pf where pf.plan_id = p.plan_id and pf.supported) as supported_feature_count
+         from ${S}.plan_records p
+         order by p.base_price_usd_monthly asc nulls last, p.name`
       )
     );
   } catch (e) { next(e); }
