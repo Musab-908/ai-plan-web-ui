@@ -146,6 +146,18 @@ app.get("/api/benchmarks/:id", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ---------- Plans (browse all, cheapest first) ----------
+app.get("/api/plans", async (req, res, next) => {
+  try {
+    res.json(
+      await q(
+        `select * from ${S}.plan_records
+         order by base_price_usd_monthly asc nulls last, name`
+      )
+    );
+  } catch (e) { next(e); }
+});
+
 // ---------- Brands -> sub-products + plans ----------
 app.get("/api/brands/:id", async (req, res, next) => {
   try {

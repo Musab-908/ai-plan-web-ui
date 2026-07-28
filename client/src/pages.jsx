@@ -1,4 +1,4 @@
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { useApi } from "./useApi";
 import { Status, CardGrid, DataTable, Bool, KV } from "./components";
@@ -6,8 +6,152 @@ import { useCompare } from "./compareContext";
 import { useSetPageMeta } from "./pageMetaContext";
 
 // ---------------- Dashboard ----------------
-export function Dashboard() {
+
+// These are raw DB-record counts that are noisy on a landing page (join-table
+// row counts, evidence/status bookkeeping, etc.) — matched by substring so we
+// don't have to hardcode every exact column name from dataset_metadata.
+const DASH_STAT_EXCLUDE = [
+  "model_family", "benchmark_source", "benchmark_score", "benchmark",
+  "platform_model_record", "platform_feature_record",
+  "plan_family_access", "plan_entitlement", "status", "evidence",
+  "feature", "subproduct",
+];
+
+// Best-effort mapping from a stat's key name to the section it summarizes,
+// so the curated cards can double as nav tiles.
+function dashStatHref(key) {
+  const k = key.toLowerCase();
+  if (k.includes("company") || k.includes("companies")) return "/companies";
+  if (k.includes("provider")) return "/providers";
+  if (k.includes("model") && !k.includes("family")) return "/models";
+  if (k.includes("plan")) return "/plans";
+  if (k.includes("brand")) return "/companies";
+  return null;
+}
+
+function DashboardStats() {
   const { data, error, loading } = useApi("dashboard");
+  const navigate = useNavigate();
+
+  if (loading || error) return <Status loading={loading} error={error} />;
+  if (!data) return null;
+
+  const stats = Object.entries(data).filter(([k]) => {
+    if (k === "database_checked_on") return false;
+    const lower = k.toLowerCase();
+    return !DASH_STAT_EXCLUDE.some((needle) => lower.includes(needle));
+  });
+
+  return (
+    <>
+      <div className="dash-grid">
+        {stats.map(([k, v]) => {
+          const href = dashStatHref(k);
+          const card = (
+            <>
+              <div className="num">{v}</div>
+              <div className="label">{k.replace(/_/g, " ")}</div>
+            </>
+          );
+          return href ? (
+            <div
+              className="dash-card dash-card-link"
+              key={k}
+              role="button"
+              tabIndex={0}
+              onClick={() => navigate(href)}
+              onKeyDown={(e) => { if (e.key === "Enter") navigate(href); }}
+            >
+              {card}
+            </div>
+          ) : (
+            <div className="dash-card" key={k}>{card}</div>
+          );
+        })}
+      </div>
+      {data.database_checked_on && (
+        <p className="dash-updated">Catalog data checked on {data.database_checked_on}</p>
+      )}
+    </>
+  );
+}
+
+function TopModelsLeaderboard() {
+  const { data, error, loading } = useApi("models");
+
+  const top = (data || [])
+    .filter((m) => m.aa_intelligence_index_score != null)
+    .sort((a, b) => Number(b.aa_intelligence_index_score) - Number(a.aa_intelligence_index_score))
+    .slice(0, 5);
+
+  return (
+    <div className="dash-panel">
+      <div className="dash-panel-head">
+        <h2>Top Models · Intelligence Index</h2>
+        <Link to="/models" className="dash-panel-more">See all →</Link>
+      </div>
+      <Status loading={loading} error={error} />
+      {!loading && !error && top.length === 0 && <div className="empty">No scored models yet.</div>}
+      {top.length > 0 && (
+        <ol className="leaderboard">
+          {top.map((m, i) => (
+            <li key={m.model_id}>
+              <Link to={`/models/${m.model_id}`}>
+                <span className="leaderboard-rank">{i + 1}</span>
+                <span className="leaderboard-name">{m.version_name}</span>
+                <span className="leaderboard-sub">{m.model_family_name}{m.provider_name ? ` · ${m.provider_name}` : ""}</span>
+                <span className="leaderboard-score">{m.aa_intelligence_index_score}</span>
+              </Link>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function CheapestPlansPreview() {
+  const { data, error, loading } = useApi("plans");
+
+  const cheapest = (data || [])
+    .slice()
+    .sort((a, b) => {
+      const av = a.base_price_usd_monthly, bv = b.base_price_usd_monthly;
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1; // "Custom"-priced plans sort last
+      if (bv == null) return -1;
+      return av - bv;
+    })
+    .slice(0, 5);
+
+  return (
+    <div className="dash-panel">
+      <div className="dash-panel-head">
+        <h2>Cheapest Plans</h2>
+        <Link to="/plans" className="dash-panel-more">See all →</Link>
+      </div>
+      <Status loading={loading} error={error} />
+      {!loading && !error && cheapest.length === 0 && <div className="empty">No plans yet.</div>}
+      {cheapest.length > 0 && (
+        <ul className="plan-preview-list">
+          {cheapest.map((p) => (
+            <li key={p.plan_id}>
+              <Link to={`/plans/${p.plan_id}`}>
+                <span className="plan-preview-name">{p.name}</span>
+                <span className="plan-preview-brand">{p.brand_name}</span>
+                <span className="plan-preview-price">
+                  {p.base_price_usd_monthly != null ? `$${p.base_price_usd_monthly}/mo` : "Custom"}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export function Dashboard() {
   return (
     <div>
       <h1>AI Model & Plan Catalog</h1>
@@ -17,23 +161,16 @@ export function Dashboard() {
         <Link className="nav-tile" to="/companies">Companies</Link>
         <Link className="nav-tile" to="/providers">Model Providers</Link>
         <Link className="nav-tile" to="/models">Browse all Models</Link>
+        <Link className="nav-tile" to="/plans">Browse all Plans</Link>
         <Link className="nav-tile" to="/benchmarks">Browse all Benchmarks</Link>
       </div>
 
-      <Status loading={loading} error={error} />
-      {data && (
-        <div className="dash-grid">
-          {Object.entries(data).filter(([k]) => k !== "database_checked_on").map(([k, v]) => (
-            <div className="dash-card" key={k}>
-              <div className="num">{v}</div>
-              <div className="label">{k.replace(/_/g, " ")}</div>
-            </div>
-          ))}
-        </div>
-      )}
-      {data?.database_checked_on && (
-        <p className="dash-updated">Catalog data checked on {data.database_checked_on}</p>
-      )}
+      <DashboardStats />
+
+      <div className="dash-panels">
+        <TopModelsLeaderboard />
+        <CheapestPlansPreview />
+      </div>
     </div>
   );
 }
@@ -472,6 +609,40 @@ export function ProductDetail() {
 }
 
 // ---------------- Plans ----------------
+export function PlansBrowse() {
+  const { data, error, loading } = useApi("plans");
+  const { toggle, isSelected } = useCompare();
+
+  return (
+    <div>
+      <h1>All Plans</h1>
+      <p className="subtitle">Click a plan for pricing details, model access, and features. Check up to 4 to compare.</p>
+      <Status loading={loading} error={error} />
+      <DataTable
+        columns={[
+          { key: "name", label: "Plan", sortable: true },
+          { key: "brand_name", label: "Brand", sortable: true },
+          { key: "audience", label: "Audience", sortable: true },
+          {
+            key: "base_price_usd_monthly",
+            label: "Price / seat / mo",
+            sortable: true,
+            sortValue: (p) => (p.base_price_usd_monthly != null ? Number(p.base_price_usd_monthly) : null),
+            render: (p) => (p.base_price_usd_monthly != null ? `$${p.base_price_usd_monthly}` : "Custom"),
+          },
+        ]}
+        rows={data}
+        rowKey={(p) => p.plan_id}
+        rowHref={(p) => `/plans/${p.plan_id}`}
+        selectable={{
+          isSelected: (p) => isSelected("plan", p.plan_id),
+          onToggle: (p) => toggle({ type: "plan", id: p.plan_id, label: p.name }),
+        }}
+      />
+    </div>
+  );
+}
+
 export function PlanDetail() {
   const { id } = useParams();
   const { data, error, loading } = useApi(`plans/${id}`);
