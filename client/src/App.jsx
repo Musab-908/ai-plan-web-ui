@@ -28,6 +28,7 @@ function GlobalSearch() {
   const { data: providers } = useApi("providers");
   const { data: models } = useApi("models");
   const { data: plans } = useApi("plans");
+  const { data: benchmarks } = useApi("benchmarks");
 
   const results = useMemo(() => {
     const t = term.trim().toLowerCase();
@@ -35,26 +36,32 @@ function GlobalSearch() {
     const out = [];
     (companies || []).forEach((c) => {
       if (c.name?.toLowerCase().includes(t)) {
-        out.push({ kind: "Company", label: c.name, href: `/companies/${c.company_id}` });
+        out.push({ kind: "Company", label: c.name, sub: c.notes || null, href: `/companies/${c.company_id}` });
       }
     });
     (providers || []).forEach((p) => {
       if (p.name?.toLowerCase().includes(t)) {
-        out.push({ kind: "Provider", label: p.name, href: `/providers/${p.provider_id}` });
+        out.push({ kind: "Provider", label: p.name, sub: p.type || null, href: `/providers/${p.provider_id}` });
       }
     });
     (models || []).forEach((m) => {
       if (m.version_name?.toLowerCase().includes(t)) {
-        out.push({ kind: "Model", label: m.version_name, href: `/models/${m.model_id}` });
+        const sub = [m.model_family_name, m.provider_name].filter(Boolean).join(" · ") || null;
+        out.push({ kind: "Model", label: m.version_name, sub, href: `/models/${m.model_id}` });
       }
     });
     (plans || []).forEach((p) => {
       if (p.name?.toLowerCase().includes(t)) {
-        out.push({ kind: "Plan", label: p.name, href: `/plans/${p.plan_id}` });
+        out.push({ kind: "Plan", label: p.name, sub: p.brand_name || null, href: `/plans/${p.plan_id}` });
+      }
+    });
+    (benchmarks || []).forEach((b) => {
+      if (b.name?.toLowerCase().includes(t)) {
+        out.push({ kind: "Benchmark", label: b.name, sub: b.category || null, href: `/benchmarks/${b.benchmark_id}` });
       }
     });
     return out.slice(0, 8);
-  }, [term, companies, providers, models, plans]);
+  }, [term, companies, providers, models, plans, benchmarks]);
 
   useEffect(() => {
     function onClickOutside(e) {
@@ -89,7 +96,10 @@ function GlobalSearch() {
           {results.map((r) => (
             <div className="global-search-result" key={r.kind + r.href} onClick={() => goTo(r.href)}>
               <span className="global-search-kind">{r.kind}</span>
-              <span>{r.label}</span>
+              <span className="global-search-text">
+                <span className="global-search-label">{r.label}</span>
+                {r.sub && <span className="global-search-sub">{r.sub}</span>}
+              </span>
             </div>
           ))}
         </div>

@@ -14,7 +14,7 @@ const DASH_STAT_EXCLUDE = [
   "model_family", "benchmark_source", "benchmark_score", "benchmark",
   "platform_model_record", "platform_feature_record",
   "plan_family_access", "plan_entitlement", "status", "evidence",
-  "feature", "subproduct",
+  "feature", "subproduct", "brand",
 ];
 
 // Best-effort mapping from a stat's key name to the section it summarizes,
@@ -82,10 +82,12 @@ function TopModelsLeaderboard() {
   const top = (data || [])
     .filter((m) => m.aa_intelligence_index_score != null)
     .sort((a, b) => Number(b.aa_intelligence_index_score) - Number(a.aa_intelligence_index_score))
-    .slice(0, 5);
+    .slice(0, 8);
+
+  const maxScore = top.length > 0 ? Number(top[0].aa_intelligence_index_score) : 1;
 
   return (
-    <div className="dash-panel">
+    <div className="dash-panel dash-panel-wide">
       <div className="dash-panel-head">
         <h2>Top Models · Intelligence Index</h2>
         <Link to="/models" className="dash-panel-more">See all →</Link>
@@ -94,58 +96,28 @@ function TopModelsLeaderboard() {
       {!loading && !error && top.length === 0 && <div className="empty">No scored models yet.</div>}
       {top.length > 0 && (
         <ol className="leaderboard">
-          {top.map((m, i) => (
-            <li key={m.model_id}>
-              <Link to={`/models/${m.model_id}`}>
-                <span className="leaderboard-rank">{i + 1}</span>
-                <span className="leaderboard-name">{m.version_name}</span>
-                <span className="leaderboard-sub">{m.model_family_name}{m.provider_name ? ` · ${m.provider_name}` : ""}</span>
-                <span className="leaderboard-score">{m.aa_intelligence_index_score}</span>
-              </Link>
-            </li>
-          ))}
+          {top.map((m, i) => {
+            const score = Number(m.aa_intelligence_index_score);
+            const pct = maxScore > 0 ? Math.max(6, (score / maxScore) * 100) : 0;
+            return (
+              <li key={m.model_id}>
+                <Link to={`/models/${m.model_id}`}>
+                  <span className="leaderboard-rank">{i + 1}</span>
+                  <span className="leaderboard-main">
+                    <span className="leaderboard-name-row">
+                      <span className="leaderboard-name">{m.version_name}</span>
+                      <span className="leaderboard-score">{m.aa_intelligence_index_score}</span>
+                    </span>
+                    <span className="leaderboard-sub">{m.model_family_name}{m.provider_name ? ` · ${m.provider_name}` : ""}</span>
+                    <span className="leaderboard-bar-track">
+                      <span className="leaderboard-bar-fill" style={{ width: `${pct}%` }} />
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
         </ol>
-      )}
-    </div>
-  );
-}
-
-function CheapestPlansPreview() {
-  const { data, error, loading } = useApi("plans");
-
-  const cheapest = (data || [])
-    .slice()
-    .sort((a, b) => {
-      const av = a.base_price_usd_monthly, bv = b.base_price_usd_monthly;
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1; // "Custom"-priced plans sort last
-      if (bv == null) return -1;
-      return av - bv;
-    })
-    .slice(0, 5);
-
-  return (
-    <div className="dash-panel">
-      <div className="dash-panel-head">
-        <h2>Cheapest Plans</h2>
-        <Link to="/plans" className="dash-panel-more">See all →</Link>
-      </div>
-      <Status loading={loading} error={error} />
-      {!loading && !error && cheapest.length === 0 && <div className="empty">No plans yet.</div>}
-      {cheapest.length > 0 && (
-        <ul className="plan-preview-list">
-          {cheapest.map((p) => (
-            <li key={p.plan_id}>
-              <Link to={`/plans/${p.plan_id}`}>
-                <span className="plan-preview-name">{p.name}</span>
-                <span className="plan-preview-brand">{p.brand_name}</span>
-                <span className="plan-preview-price">
-                  {p.base_price_usd_monthly != null ? `$${p.base_price_usd_monthly}/mo` : "Custom"}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
       )}
     </div>
   );
@@ -157,19 +129,18 @@ export function Dashboard() {
       <h1>AI Model & Plan Catalog</h1>
       <p className="subtitle">Explore companies, model providers, plans, sub-products, models and benchmarks.</p>
 
-      <div className="nav-tiles">
-        <Link className="nav-tile" to="/companies">Companies</Link>
-        <Link className="nav-tile" to="/providers">Model Providers</Link>
-        <Link className="nav-tile" to="/models">Browse all Models</Link>
-        <Link className="nav-tile" to="/plans">Browse all Plans</Link>
-        <Link className="nav-tile" to="/benchmarks">Browse all Benchmarks</Link>
-      </div>
+      <nav className="dash-quicknav">
+        <Link to="/companies">Companies</Link>
+        <Link to="/providers">Providers</Link>
+        <Link to="/models">Models</Link>
+        <Link to="/plans">Plans</Link>
+        <Link to="/benchmarks">Benchmarks</Link>
+      </nav>
 
       <DashboardStats />
 
       <div className="dash-panels">
         <TopModelsLeaderboard />
-        <CheapestPlansPreview />
       </div>
     </div>
   );

@@ -232,10 +232,26 @@ th.sortable:hover { color: var(--accent); }
 .dash-card-link:hover { border-color: var(--border-hover); transform: translateY(-1px); }
 .dash-card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* ---- Dashboard panels (leaderboard + cheapest plans) ---- */
+/* ---- Dashboard quick nav (pills) ---- */
+.dash-quicknav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.dash-quicknav a {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dash-quicknav a:hover { border-color: var(--border-hover); color: var(--accent); }
+
+/* ---- Dashboard panels ---- */
 .dash-panels {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 16px;
   margin-top: 8px;
 }
@@ -243,59 +259,59 @@ th.sortable:hover { color: var(--accent); }
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 16px 18px;
+  padding: 18px 20px;
 }
+.dash-panel-wide { padding: 20px 24px; }
 .dash-panel-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 .dash-panel-head h2 { margin: 0; }
 .dash-panel-more { font-size: 12px; color: var(--accent); white-space: nowrap; }
 
 .leaderboard { list-style: none; margin: 0; padding: 0; }
-.leaderboard li + li { margin-top: 2px; }
+.leaderboard li + li { margin-top: 4px; }
 .leaderboard a {
   display: grid;
-  grid-template-columns: 22px 1fr auto;
-  grid-template-rows: auto auto;
+  grid-template-columns: 28px 1fr;
   align-items: center;
-  column-gap: 10px;
-  padding: 8px 6px;
-  border-radius: 6px;
+  column-gap: 14px;
+  padding: 10px 8px;
+  border-radius: 8px;
 }
 .leaderboard a:hover { background: var(--row-hover); }
 .leaderboard-rank {
-  grid-row: 1 / 3;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-dim);
+  text-align: center;
 }
-.leaderboard-name { font-size: 14px; font-weight: 600; }
-.leaderboard-sub { grid-column: 2; font-size: 11px; color: var(--text-dim); }
-.leaderboard-score {
-  grid-row: 1 / 3;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--accent);
-}
-
-.plan-preview-list { list-style: none; margin: 0; padding: 0; }
-.plan-preview-list li + li { margin-top: 2px; }
-.plan-preview-list a {
+.leaderboard li:nth-child(1) .leaderboard-rank { color: var(--accent); }
+.leaderboard-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.leaderboard-name-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 6px;
-  border-radius: 6px;
 }
-.plan-preview-list a:hover { background: var(--row-hover); }
-.plan-preview-name { font-size: 14px; font-weight: 600; }
-.plan-preview-brand { font-size: 11px; color: var(--text-dim); flex: 1; margin-left: 8px; }
-.plan-preview-price { font-size: 13px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.leaderboard-name { font-size: 14px; font-weight: 600; }
+.leaderboard-score { font-size: 15px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.leaderboard-sub { font-size: 11px; color: var(--text-dim); }
+.leaderboard-bar-track {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.leaderboard-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+}
 
 /* ---- Global search (topbar) ---- */
 .global-search { position: relative; width: 240px; }
@@ -325,7 +341,7 @@ th.sortable:hover { color: var(--accent); }
 }
 .global-search-result {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 8px 10px;
   border-radius: 6px;
@@ -333,7 +349,11 @@ th.sortable:hover { color: var(--accent); }
   font-size: 13px;
 }
 .global-search-result:hover { background: var(--row-hover); }
+.global-search-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.global-search-label { line-height: 1.3; }
+.global-search-sub { font-size: 11px; color: var(--text-dim); line-height: 1.3; }
 .global-search-kind {
+  margin-top: 1px;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
