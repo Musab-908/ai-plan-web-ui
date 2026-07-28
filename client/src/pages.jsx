@@ -1,9 +1,10 @@
 import { Link, useParams, useSearchParams, useNavigate } from "react-router-dom";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useApi } from "./useApi";
-import { Status, CardGrid, DataTable, Bool, KV } from "./components";
+import { Status, CardGrid, DataTable, Bool, KV, sortTableRows } from "./components";
 import { useCompare } from "./compareContext";
 import { useSetPageMeta } from "./pageMetaContext";
+import { exportToCsv, exportToXlsx } from "./exportUtils";
 
 // ---------------- Dashboard ----------------
 
@@ -577,31 +578,198 @@ export function ProductDetail() {
 }
 
 // ---------------- Plans ----------------
+
+// Heuristic only (per request) — plan `audience` is free text, not an enum,
+// so this maps common wording to a coarse Individual/Organization split.
+const AUDIENCE_ORG_WORDS = ["team", "business", "enterprise", "organization", "org", "company", "commercial", "group"];
+const AUDIENCE_INDIVIDUAL_WORDS = ["individual", "personal", "pro", "free", "solo", "consumer", "student"];
+function audienceCategory(raw) {
+  if (!raw) return "Unspecified";
+  const t = raw.toLowerCase();
+  if (AUDIENCE_ORG_WORDS.some((w) => t.includes(w))) return "Organization";
+  if (AUDIENCE_INDIVIDUAL_WORDS.some((w) => t.includes(w))) return "Individual";
+  return "Unspecified";
+}
+
+// Custom/contact-sales pricing counts as Paid, not Free (per request) — only
+// an explicit $0 price is Free.
+function isFreePlan(p) {
+  return p.base_price_usd_monthly === 0 || p.base_price_usd_monthly === "0";
+}
+
+function FeatureColumnPicker({ allFeatures, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
+
+  useEffect(() => {
+    function onClickOutside(e) {
+      if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  const toggleFeature = (name) => {
+    onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
+  };
+
+  return (
+    <div className="col-picker" ref={boxRef}>
+      <button className="col-picker-btn" onClick={() => setOpen((o) => !o)}>
+        + Feature columns {selected.length > 0 ? `(${selected.length})` : ""}
+      </button>
+      {open && (
+        <div className="col-picker-panel">
+          {allFeatures.length === 0 && <div className="col-picker-empty">No features found.</div>}
+          {allFeatures.map((f) => (
+            <label className="col-picker-item" key={f.feature_name}>
+              <input
+                type="checkbox"
+                checked={selected.includes(f.feature_name)}
+                onChange={() => toggleFeature(f.feature_name)}
+              />
+              <span>{f.feature_name}</span>
+              {f.feature_category && <span className="col-picker-cat">{f.feature_category}</span>}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PlansBrowse() {
   const { data, error, loading } = useApi("plans");
   const { toggle, isSelected } = useCompare();
+  const [selectedFeatures, setSelectedFeatures] = useState([]);
+  const [sort, setSort] = useState(null);
+
+  // Every distinct feature name/category seen across any plan — powers the
+  // column picker. Plans that don't list a given feature simply show "—" for it.
+  const allFeatures = useMemo(() => {
+    const byName = new Map();
+    (data || []).forEach((p) => {
+      (p.features || []).forEach((f) => {
+        if (!byName.has(f.feature_name)) byName.set(f.feature_name, f);
+      });
+    });
+    return [...byName.values()].sort((a, b) => a.feature_name.localeCompare(b.feature_name));
+  }, [data]);
+
+  const columns = useMemo(() => {
+    const base = [
+      {
+        key: "company_name",
+        label: "Company",
+        sortable: true,
+        exportValue: (p) => p.company_name || "",
+      },
+      {
+        key: "name",
+        label: "Plan",
+        sortable: true,
+        render: (p) => (
+          <>
+            {p.name}
+            <span className="plan-cell-brand"> — {p.brand_name}</span>
+          </>
+        ),
+        exportValue: (p) => `${p.name} — ${p.brand_name}`,
+      },
+      {
+        key: "audience_category",
+        label: "Audience",
+        sortable: true,
+        sortValue: (p) => audienceCategory(p.audience),
+        render: (p) => <span title={p.audience || ""}>{audienceCategory(p.audience)}</span>,
+        exportValue: (p) => audienceCategory(p.audience),
+      },
+      {
+        key: "base_price_usd_monthly",
+        label: "Price / seat / mo",
+        sortable: true,
+        sortValue: (p) => (p.base_price_usd_monthly != null ? Number(p.base_price_usd_monthly) : null),
+        render: (p) => (p.base_price_usd_monthly != null ? `$${p.base_price_usd_monthly}` : "Custom"),
+        exportValue: (p) => (p.base_price_usd_monthly != null ? p.base_price_usd_monthly : "Custom"),
+      },
+      {
+        key: "free_or_paid",
+        label: "Free / Paid",
+        sortable: true,
+        sortValue: (p) => (isFreePlan(p) ? 0 : 1),
+        render: (p) => <span className={`badge ${isFreePlan(p) ? "yes" : "no"}`}>{isFreePlan(p) ? "Free" : "Paid"}</span>,
+        exportValue: (p) => (isFreePlan(p) ? "Free" : "Paid"),
+      },
+      {
+        key: "top_families",
+        label: "Top Families · AA Index",
+        sortValue: (p) => p.top_families?.[0]?.family_name || null,
+        render: (p) => (p.top_families?.length > 0 ? p.top_families.map((f) => f.family_name).join(", ") : "—"),
+        exportValue: (p) => (p.top_families?.length > 0 ? p.top_families.map((f) => f.family_name).join("; ") : ""),
+      },
+      {
+        key: "best_model_aa_index_score",
+        label: "Best Model AA Index",
+        sortable: true,
+        sortValue: (p) => (p.best_model_aa_index_score != null ? Number(p.best_model_aa_index_score) : null),
+        render: (p) => p.best_model_aa_index_score ?? "—",
+        exportValue: (p) => p.best_model_aa_index_score ?? "",
+      },
+    ];
+
+    const featureCols = selectedFeatures.map((name) => ({
+      key: `feature:${name}`,
+      label: name,
+      sortable: true,
+      sortValue: (p) => {
+        const match = p.features?.find((f) => f.feature_name === name);
+        if (!match) return 0;
+        return match.supported ? 2 : 1;
+      },
+      render: (p) => {
+        const match = p.features?.find((f) => f.feature_name === name);
+        return match ? <Bool value={match.supported} /> : "—";
+      },
+      exportValue: (p) => {
+        const match = p.features?.find((f) => f.feature_name === name);
+        if (!match) return "";
+        return match.supported ? "Yes" : "No";
+      },
+    }));
+
+    return [...base, ...featureCols];
+  }, [selectedFeatures]);
+
+  const sortedRows = useMemo(() => sortTableRows(data || [], columns, sort), [data, columns, sort]);
+
+  const handleExportCsv = () => exportToCsv(columns, sortedRows, "plans.csv");
+  const handleExportXlsx = () => exportToXlsx(columns, sortedRows, "plans.xlsx");
 
   return (
     <div>
       <h1>All Plans</h1>
       <p className="subtitle">Click a plan for pricing details, model access, and features. Check up to 4 to compare.</p>
+
+      <div className="plans-toolbar">
+        <FeatureColumnPicker allFeatures={allFeatures} selected={selectedFeatures} onChange={setSelectedFeatures} />
+        <div className="plans-toolbar-export">
+          <button className="export-btn" onClick={handleExportCsv} disabled={!data || data.length === 0}>
+            Export CSV
+          </button>
+          <button className="export-btn" onClick={handleExportXlsx} disabled={!data || data.length === 0}>
+            Export Excel
+          </button>
+        </div>
+      </div>
+
       <Status loading={loading} error={error} />
       <DataTable
-        columns={[
-          { key: "name", label: "Plan", sortable: true },
-          { key: "brand_name", label: "Brand", sortable: true },
-          { key: "audience", label: "Audience", sortable: true },
-          {
-            key: "base_price_usd_monthly",
-            label: "Price / seat / mo",
-            sortable: true,
-            sortValue: (p) => (p.base_price_usd_monthly != null ? Number(p.base_price_usd_monthly) : null),
-            render: (p) => (p.base_price_usd_monthly != null ? `$${p.base_price_usd_monthly}` : "Custom"),
-          },
-        ]}
+        columns={columns}
         rows={data}
         rowKey={(p) => p.plan_id}
         rowHref={(p) => `/plans/${p.plan_id}`}
+        sort={sort}
+        onSortChange={setSort}
         selectable={{
           isSelected: (p) => isSelected("plan", p.plan_id),
           onToggle: (p) => toggle({ type: "plan", id: p.plan_id, label: p.name }),

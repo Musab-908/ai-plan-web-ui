@@ -31,30 +31,40 @@ export function CardGrid({ items, getKey, getTitle, getMeta, getHref, selectable
   );
 }
 
+// Pure sort helper shared by DataTable and anything that needs the exact
+// same row order outside the table (e.g. CSV/Excel export of "current view").
+export function sortTableRows(rows, columns, sort) {
+  if (!sort) return rows;
+  const col = columns.find((c) => c.key === sort.key);
+  if (!col) return rows;
+  const getValue = col.sortValue || ((row) => row[col.key]);
+  return [...rows].sort((a, b) => {
+    const av = getValue(a);
+    const bv = getValue(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1; // nulls last regardless of direction
+    if (bv == null) return -1;
+    let cmp;
+    if (typeof av === "number" && typeof bv === "number") cmp = av - bv;
+    else cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
+}
+
 // columns: [{ key, label, render?(row), sortable?, sortValue?(row) }]
 // selectable: { isSelected(row), onToggle(row) } — adds a checkbox column
-export function DataTable({ columns, rows, rowKey, rowHref, selectable }) {
-  const [sort, setSort] = useState(null); // { key, dir: "asc" | "desc" }
+// sort/onSortChange: optional controlled-sort pair (pass a useState pair) so
+// a parent can read back the exact sorted row order, e.g. for CSV export.
+// If omitted, DataTable manages its own sort state as before.
+export function DataTable({ columns, rows, rowKey, rowHref, selectable, sort: sortProp, onSortChange }) {
+  const [internalSort, setInternalSort] = useState(null); // { key, dir: "asc" | "desc" }
+  const controlled = onSortChange !== undefined;
+  const sort = controlled ? sortProp : internalSort;
+  const setSort = controlled ? onSortChange : setInternalSort;
 
   if (!rows || rows.length === 0) return <div className="empty">No records.</div>;
 
-  const sortedRows = (() => {
-    if (!sort) return rows;
-    const col = columns.find((c) => c.key === sort.key);
-    if (!col) return rows;
-    const getValue = col.sortValue || ((row) => row[col.key]);
-    return [...rows].sort((a, b) => {
-      const av = getValue(a);
-      const bv = getValue(b);
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1; // nulls last regardless of direction
-      if (bv == null) return -1;
-      let cmp;
-      if (typeof av === "number" && typeof bv === "number") cmp = av - bv;
-      else cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
-      return sort.dir === "asc" ? cmp : -cmp;
-    });
-  })();
+  const sortedRows = sortTableRows(rows, columns, sort);
 
   const toggleSort = (col) => {
     if (!col.sortable) return;
