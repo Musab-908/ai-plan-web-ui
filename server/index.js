@@ -162,15 +162,17 @@ app.get("/api/benchmarks/:id", async (req, res, next) => {
 
 // ---------- Plans (browse all, cheapest first) ----------
 // Enriched with: company name (via brand), a deduped feature list, the top 3
-// accessible model families ranked by AA Intelligence Index, and the plan's
-// single best accessible model score — reusing AA_INDEX_FALLBACK so these
-// numbers agree with what the model/family pages show.
+// individual models the plan grants access to (best-scoring model per
+// accessible family, then top 3 of those overall) ranked by AA Intelligence
+// Index, and the full list of accessible family names (used for filtering,
+// unlike the capped top-3 used for display) — reusing AA_INDEX_FALLBACK so
+// scores agree with what the model/family pages show.
 app.get("/api/plans", async (req, res, next) => {
   try {
     res.json(
       await q(`
         with model_scores as (
-          select m.model_id, m.model_family_id, m.model_family_name, ${AA_INDEX_FALLBACK}
+          select m.model_id, m.model_family_id, m.model_family_name, m.version_name, ${AA_INDEX_FALLBACK}
           from ${S}.models m
         )
         select
@@ -178,8 +180,8 @@ app.get("/api/plans", async (req, res, next) => {
           co.company_id as company_id,
           co.name as company_name,
           feats.features,
-          fam.top_families,
-          bm.best_model_aa_index_score
+          topm.top_models,
+          accfam.accessible_families
         from ${S}.plan_records p
         left join ${S}.brands b on b.brand_id = p.brand_id
         left join ${S}.companies co on co.company_id = b.company_id
@@ -193,25 +195,28 @@ app.get("/api/plans", async (req, res, next) => {
           ) t
         ) feats on true
         left join lateral (
-          select coalesce(json_agg(x order by x.best_family_score desc nulls last), '[]'::json) as top_families
+          select coalesce(json_agg(z order by z.score desc nulls last), '[]'::json) as top_models
           from (
-            select pm.model_family_name as family_name, max(ms.aa_intelligence_index_score) as best_family_score
-            from ${S}.plan_models pm
-            left join model_scores ms on ms.model_family_id = pm.model_family_id
-            where pm.plan_id = p.plan_id
-              and coalesce(pm.status_label, '') not ilike 'not available'
-            group by pm.model_family_name
-            order by best_family_score desc nulls last
+            select fam_best.model_id, fam_best.version_name, fam_best.score
+            from (
+              select distinct on (pm.model_family_id)
+                pm.model_family_id, ms.model_id, ms.version_name, ms.aa_intelligence_index_score as score
+              from ${S}.plan_models pm
+              left join model_scores ms on ms.model_family_id = pm.model_family_id
+              where pm.plan_id = p.plan_id
+                and coalesce(pm.status_label, '') not ilike 'not available'
+              order by pm.model_family_id, ms.aa_intelligence_index_score desc nulls last
+            ) fam_best
+            order by fam_best.score desc nulls last
             limit 3
-          ) x
-        ) fam on true
+          ) z
+        ) topm on true
         left join lateral (
-          select max(ms.aa_intelligence_index_score) as best_model_aa_index_score
+          select coalesce(json_agg(distinct pm.model_family_name), '[]'::json) as accessible_families
           from ${S}.plan_models pm
-          left join model_scores ms on ms.model_family_id = pm.model_family_id
           where pm.plan_id = p.plan_id
             and coalesce(pm.status_label, '') not ilike 'not available'
-        ) bm on true
+        ) accfam on true
         order by p.base_price_usd_monthly asc nulls last, p.name
       `)
     );

@@ -594,10 +594,11 @@ function audienceCategory(raw) {
 // Custom/contact-sales pricing counts as Paid, not Free (per request) — only
 // an explicit $0 price is Free.
 function isFreePlan(p) {
-  return p.base_price_usd_monthly === 0 || p.base_price_usd_monthly === "0";
+  if (p.base_price_usd_monthly == null) return false; // null/"Custom" pricing is Paid, not Free
+  return Number(p.base_price_usd_monthly) === 0;
 }
 
-function FeatureColumnPicker({ allFeatures, selected, onChange }) {
+function CheckboxDropdown({ label, options, selected, onChange, getKey, getLabel }) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef(null);
 
@@ -609,24 +610,75 @@ function FeatureColumnPicker({ allFeatures, selected, onChange }) {
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
-  const toggleFeature = (name) => {
-    onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
+  const toggleValue = (key) => {
+    onChange(selected.includes(key) ? selected.filter((k) => k !== key) : [...selected, key]);
   };
 
   return (
     <div className="col-picker" ref={boxRef}>
-      <button className="col-picker-btn" onClick={() => setOpen((o) => !o)}>
-        + Feature columns {selected.length > 0 ? `(${selected.length})` : ""}
+      <button className="filter-btn" onClick={() => setOpen((o) => !o)}>
+        {label} {selected.length > 0 ? `(${selected.length})` : ""}
       </button>
       {open && (
         <div className="col-picker-panel">
+          {options.length === 0 && <div className="col-picker-empty">Nothing to filter on.</div>}
+          {options.map((opt) => {
+            const key = getKey(opt);
+            return (
+              <label className="col-picker-item" key={key}>
+                <input type="checkbox" checked={selected.includes(key)} onChange={() => toggleValue(key)} />
+                <span>{getLabel(opt)}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ColumnPicker({ baseColumns, hiddenBase, onToggleBase, allFeatures, selectedFeatures, onToggleFeature }) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
+
+  useEffect(() => {
+    function onClickOutside(e) {
+      if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  const shownCount = baseColumns.filter((c) => c.optional && !hiddenBase.includes(c.key)).length + selectedFeatures.length;
+
+  return (
+    <div className="col-picker" ref={boxRef}>
+      <button className="col-picker-btn" onClick={() => setOpen((o) => !o)}>
+        Columns {shownCount > 0 ? `(+${shownCount})` : ""}
+      </button>
+      {open && (
+        <div className="col-picker-panel col-picker-panel-wide">
+          <div className="col-picker-section">Table columns</div>
+          {baseColumns.map((c) => (
+            <label className={`col-picker-item ${!c.optional ? "col-picker-item-locked" : ""}`} key={c.key}>
+              <input
+                type="checkbox"
+                checked={c.optional ? !hiddenBase.includes(c.key) : true}
+                disabled={!c.optional}
+                onChange={() => c.optional && onToggleBase(c.key)}
+              />
+              <span>{c.label}</span>
+              {!c.optional && <span className="col-picker-cat">Always shown</span>}
+            </label>
+          ))}
+          <div className="col-picker-section">Feature columns</div>
           {allFeatures.length === 0 && <div className="col-picker-empty">No features found.</div>}
           {allFeatures.map((f) => (
             <label className="col-picker-item" key={f.feature_name}>
               <input
                 type="checkbox"
-                checked={selected.includes(f.feature_name)}
-                onChange={() => toggleFeature(f.feature_name)}
+                checked={selectedFeatures.includes(f.feature_name)}
+                onChange={() => onToggleFeature(f.feature_name)}
               />
               <span>{f.feature_name}</span>
               {f.feature_category && <span className="col-picker-cat">{f.feature_category}</span>}
@@ -638,14 +690,34 @@ function FeatureColumnPicker({ allFeatures, selected, onChange }) {
   );
 }
 
+const EMPTY_FILTERS = {
+  companies: [],
+  audiences: [],
+  freePaid: "all", // 'all' | 'free' | 'paid'
+  priceMin: "",
+  priceMax: "",
+  feature: "",
+  family: "",
+};
+
 export function PlansBrowse() {
   const { data, error, loading } = useApi("plans");
   const { toggle, isSelected } = useCompare();
   const [selectedFeatures, setSelectedFeatures] = useState([]);
+  const [hiddenBase, setHiddenBase] = useState([]);
   const [sort, setSort] = useState(null);
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
+
+  const toggleFeatureCol = (name) => {
+    setSelectedFeatures((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
+  };
+  const toggleBaseCol = (key) => {
+    setHiddenBase((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  };
 
   // Every distinct feature name/category seen across any plan — powers the
-  // column picker. Plans that don't list a given feature simply show "—" for it.
+  // column picker and the "has feature" filter. Plans that don't list a
+  // given feature simply show "—" for it rather than a false "No".
   const allFeatures = useMemo(() => {
     const byName = new Map();
     (data || []).forEach((p) => {
@@ -656,29 +728,74 @@ export function PlansBrowse() {
     return [...byName.values()].sort((a, b) => a.feature_name.localeCompare(b.feature_name));
   }, [data]);
 
-  const columns = useMemo(() => {
-    const base = [
+  const allCompanies = useMemo(() => {
+    const names = new Set((data || []).map((p) => p.company_name).filter(Boolean));
+    return [...names].sort();
+  }, [data]);
+
+  const allFamilies = useMemo(() => {
+    const names = new Set();
+    (data || []).forEach((p) => (p.accessible_families || []).forEach((f) => names.add(f)));
+    return [...names].sort();
+  }, [data]);
+
+  const filteredRows = useMemo(() => {
+    let rows = data || [];
+    if (filters.companies.length > 0) rows = rows.filter((p) => filters.companies.includes(p.company_name));
+    if (filters.audiences.length > 0) rows = rows.filter((p) => filters.audiences.includes(audienceCategory(p.audience)));
+    if (filters.freePaid === "free") rows = rows.filter(isFreePlan);
+    if (filters.freePaid === "paid") rows = rows.filter((p) => !isFreePlan(p));
+    if (filters.priceMin !== "") {
+      rows = rows.filter((p) => p.base_price_usd_monthly != null && Number(p.base_price_usd_monthly) >= Number(filters.priceMin));
+    }
+    if (filters.priceMax !== "") {
+      rows = rows.filter((p) => p.base_price_usd_monthly != null && Number(p.base_price_usd_monthly) <= Number(filters.priceMax));
+    }
+    if (filters.feature) {
+      rows = rows.filter((p) => p.features?.some((f) => f.feature_name === filters.feature && f.supported));
+    }
+    if (filters.family) {
+      rows = rows.filter((p) => (p.accessible_families || []).includes(filters.family));
+    }
+    return rows;
+  }, [data, filters]);
+
+  const activeFilterCount =
+    filters.companies.length +
+    filters.audiences.length +
+    (filters.freePaid !== "all" ? 1 : 0) +
+    (filters.priceMin !== "" ? 1 : 0) +
+    (filters.priceMax !== "" ? 1 : 0) +
+    (filters.feature ? 1 : 0) +
+    (filters.family ? 1 : 0);
+
+  const baseColumnDefs = useMemo(
+    () => [
       {
         key: "company_name",
         label: "Company",
+        optional: false,
         sortable: true,
         exportValue: (p) => p.company_name || "",
       },
       {
         key: "name",
         label: "Plan",
+        optional: false,
         sortable: true,
+        sortValue: (p) => p.brand_name || "",
         render: (p) => (
           <>
-            {p.name}
-            <span className="plan-cell-brand"> — {p.brand_name}</span>
+            {p.brand_name}
+            <span className="plan-cell-brand"> — {p.name}</span>
           </>
         ),
-        exportValue: (p) => `${p.name} — ${p.brand_name}`,
+        exportValue: (p) => `${p.brand_name} — ${p.name}`,
       },
       {
         key: "audience_category",
         label: "Audience",
+        optional: true,
         sortable: true,
         sortValue: (p) => audienceCategory(p.audience),
         render: (p) => <span title={p.audience || ""}>{audienceCategory(p.audience)}</span>,
@@ -687,36 +804,50 @@ export function PlansBrowse() {
       {
         key: "base_price_usd_monthly",
         label: "Price / seat / mo",
+        optional: true,
         sortable: true,
         sortValue: (p) => (p.base_price_usd_monthly != null ? Number(p.base_price_usd_monthly) : null),
-        render: (p) => (p.base_price_usd_monthly != null ? `$${p.base_price_usd_monthly}` : "Custom"),
-        exportValue: (p) => (p.base_price_usd_monthly != null ? p.base_price_usd_monthly : "Custom"),
+        render: (p) => (isFreePlan(p) ? "Free" : p.base_price_usd_monthly != null ? `$${p.base_price_usd_monthly}` : "Custom"),
+        exportValue: (p) => (isFreePlan(p) ? "Free" : p.base_price_usd_monthly != null ? p.base_price_usd_monthly : "Custom"),
       },
       {
         key: "free_or_paid",
         label: "Free / Paid",
+        optional: true,
         sortable: true,
         sortValue: (p) => (isFreePlan(p) ? 0 : 1),
         render: (p) => <span className={`badge ${isFreePlan(p) ? "yes" : "no"}`}>{isFreePlan(p) ? "Free" : "Paid"}</span>,
         exportValue: (p) => (isFreePlan(p) ? "Free" : "Paid"),
       },
       {
-        key: "top_families",
-        label: "Top Families · AA Index",
-        sortValue: (p) => p.top_families?.[0]?.family_name || null,
-        render: (p) => (p.top_families?.length > 0 ? p.top_families.map((f) => f.family_name).join(", ") : "—"),
-        exportValue: (p) => (p.top_families?.length > 0 ? p.top_families.map((f) => f.family_name).join("; ") : ""),
+        key: "top_models",
+        label: "Top Models · AA Index",
+        optional: true,
+        sortValue: (p) => p.top_models?.[0]?.score ?? null,
+        render: (p) => (p.top_models?.length > 0 ? p.top_models.map((m) => m.version_name).join(", ") : "—"),
+        exportValue: (p) => (p.top_models?.length > 0 ? p.top_models.map((m) => m.version_name).join("; ") : ""),
       },
       {
-        key: "best_model_aa_index_score",
-        label: "Best Model AA Index",
+        key: "best_model",
+        label: "Best Model",
+        optional: true,
         sortable: true,
-        sortValue: (p) => (p.best_model_aa_index_score != null ? Number(p.best_model_aa_index_score) : null),
-        render: (p) => p.best_model_aa_index_score ?? "—",
-        exportValue: (p) => p.best_model_aa_index_score ?? "",
+        sortValue: (p) => p.top_models?.[0]?.score ?? null,
+        render: (p) => {
+          const best = p.top_models?.[0];
+          return best ? `${best.version_name} (${best.score ?? "—"})` : "—";
+        },
+        exportValue: (p) => {
+          const best = p.top_models?.[0];
+          return best ? `${best.version_name} (${best.score ?? "—"})` : "";
+        },
       },
-    ];
+    ],
+    []
+  );
 
+  const columns = useMemo(() => {
+    const visibleBase = baseColumnDefs.filter((c) => !c.optional || !hiddenBase.includes(c.key));
     const featureCols = selectedFeatures.map((name) => ({
       key: `feature:${name}`,
       label: name,
@@ -736,11 +867,10 @@ export function PlansBrowse() {
         return match.supported ? "Yes" : "No";
       },
     }));
+    return [...visibleBase, ...featureCols];
+  }, [baseColumnDefs, hiddenBase, selectedFeatures]);
 
-    return [...base, ...featureCols];
-  }, [selectedFeatures]);
-
-  const sortedRows = useMemo(() => sortTableRows(data || [], columns, sort), [data, columns, sort]);
+  const sortedRows = useMemo(() => sortTableRows(filteredRows, columns, sort), [filteredRows, columns, sort]);
 
   const handleExportCsv = () => exportToCsv(columns, sortedRows, "plans.csv");
   const handleExportXlsx = () => exportToXlsx(columns, sortedRows, "plans.xlsx");
@@ -750,31 +880,113 @@ export function PlansBrowse() {
       <h1>All Plans</h1>
       <p className="subtitle">Click a plan for pricing details, model access, and features. Check up to 4 to compare.</p>
 
+      <div className="plans-filterbar">
+        <CheckboxDropdown
+          label="Company"
+          options={allCompanies}
+          selected={filters.companies}
+          onChange={(v) => setFilters((f) => ({ ...f, companies: v }))}
+          getKey={(c) => c}
+          getLabel={(c) => c}
+        />
+        <CheckboxDropdown
+          label="Audience"
+          options={["Individual", "Organization", "Unspecified"]}
+          selected={filters.audiences}
+          onChange={(v) => setFilters((f) => ({ ...f, audiences: v }))}
+          getKey={(a) => a}
+          getLabel={(a) => a}
+        />
+        <select
+          className="filter-select"
+          value={filters.freePaid}
+          onChange={(e) => setFilters((f) => ({ ...f, freePaid: e.target.value }))}
+        >
+          <option value="all">Free & Paid</option>
+          <option value="free">Free only</option>
+          <option value="paid">Paid only</option>
+        </select>
+        <div className="filter-price-range">
+          <input
+            type="number"
+            className="filter-price-input"
+            placeholder="Min $"
+            value={filters.priceMin}
+            onChange={(e) => setFilters((f) => ({ ...f, priceMin: e.target.value }))}
+          />
+          <span>–</span>
+          <input
+            type="number"
+            className="filter-price-input"
+            placeholder="Max $"
+            value={filters.priceMax}
+            onChange={(e) => setFilters((f) => ({ ...f, priceMax: e.target.value }))}
+          />
+        </div>
+        <select
+          className="filter-select"
+          value={filters.feature}
+          onChange={(e) => setFilters((f) => ({ ...f, feature: e.target.value }))}
+        >
+          <option value="">Any feature</option>
+          {allFeatures.map((f) => (
+            <option key={f.feature_name} value={f.feature_name}>{f.feature_name}</option>
+          ))}
+        </select>
+        <select
+          className="filter-select"
+          value={filters.family}
+          onChange={(e) => setFilters((f) => ({ ...f, family: e.target.value }))}
+        >
+          <option value="">Any model family</option>
+          {allFamilies.map((name) => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+        {activeFilterCount > 0 && (
+          <button className="filter-clear" onClick={() => setFilters(EMPTY_FILTERS)}>
+            Clear filters ({activeFilterCount})
+          </button>
+        )}
+      </div>
+
       <div className="plans-toolbar">
-        <FeatureColumnPicker allFeatures={allFeatures} selected={selectedFeatures} onChange={setSelectedFeatures} />
+        <ColumnPicker
+          baseColumns={baseColumnDefs}
+          hiddenBase={hiddenBase}
+          onToggleBase={toggleBaseCol}
+          allFeatures={allFeatures}
+          selectedFeatures={selectedFeatures}
+          onToggleFeature={toggleFeatureCol}
+        />
         <div className="plans-toolbar-export">
-          <button className="export-btn" onClick={handleExportCsv} disabled={!data || data.length === 0}>
+          <button className="export-btn" onClick={handleExportCsv} disabled={sortedRows.length === 0}>
             Export CSV
           </button>
-          <button className="export-btn" onClick={handleExportXlsx} disabled={!data || data.length === 0}>
+          <button className="export-btn" onClick={handleExportXlsx} disabled={sortedRows.length === 0}>
             Export Excel
           </button>
         </div>
       </div>
 
       <Status loading={loading} error={error} />
-      <DataTable
-        columns={columns}
-        rows={data}
-        rowKey={(p) => p.plan_id}
-        rowHref={(p) => `/plans/${p.plan_id}`}
-        sort={sort}
-        onSortChange={setSort}
-        selectable={{
-          isSelected: (p) => isSelected("plan", p.plan_id),
-          onToggle: (p) => toggle({ type: "plan", id: p.plan_id, label: p.name }),
-        }}
-      />
+      {!loading && !error && data && filteredRows.length === 0 && (
+        <div className="empty">No plans match the current filters.</div>
+      )}
+      {filteredRows.length > 0 && (
+        <DataTable
+          columns={columns}
+          rows={filteredRows}
+          rowKey={(p) => p.plan_id}
+          rowHref={(p) => `/plans/${p.plan_id}`}
+          sort={sort}
+          onSortChange={setSort}
+          selectable={{
+            isSelected: (p) => isSelected("plan", p.plan_id),
+            onToggle: (p) => toggle({ type: "plan", id: p.plan_id, label: p.name }),
+          }}
+        />
+      )}
     </div>
   );
 }
