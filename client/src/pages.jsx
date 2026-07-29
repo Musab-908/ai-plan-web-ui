@@ -14,7 +14,7 @@ import { exportToCsv, exportToXlsx } from "./exportUtils";
 const DASH_STAT_EXCLUDE = [
   "model_family", "benchmark_source", "benchmark_score", "benchmark",
   "platform_model_record", "platform_feature_record",
-  "plan_family_access", "plan_entitlement", "status", "evidence",
+  "plan_model_access", "plan_entitlement", "status", "evidence",
   "feature", "subproduct", "brand",
   "use_case_count", "recommendation_policy_count", "platform_agent_count", "platform_agent_score_count",
 ];
@@ -1453,7 +1453,7 @@ export function PlanDetail() {
               sourceColumn((r) => r.evidence_url),
             ]}
             rows={(data.modelAccess || []).filter((m) => (m.status_label || "").toLowerCase().includes("generally available"))}
-            rowKey={(m) => m.plan_family_access_id}
+            rowKey={(m) => m.plan_model_access_id}
             rowHref={(m) => `/families/${m.model_family_id}`}
           />
 
