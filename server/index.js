@@ -85,7 +85,7 @@ app.get("/api/providers/:id", async (req, res, next) => {
 // the client per page.
 const AA_INDEX_FALLBACK = `
   coalesce(
-    m.aa_intelligence_index_score,
+    m.aa_v4_1_score,
     (
       select bs.score_value
       from ${S}.benchmark_scores bs

@@ -1,7 +1,7 @@
 import { Link, useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useApi } from "./useApi";
-import { Status, CardGrid, DataTable, Bool, KV, sortTableRows } from "./components";
+import { Status, CardGrid, DataTable, Bool, KV, PctDiff, sortTableRows, SourceLink, sourceColumn } from "./components";
 import { useCompare } from "./compareContext";
 import { useSetPageMeta } from "./pageMetaContext";
 import { exportToCsv, exportToXlsx } from "./exportUtils";
@@ -16,6 +16,7 @@ const DASH_STAT_EXCLUDE = [
   "platform_model_record", "platform_feature_record",
   "plan_family_access", "plan_entitlement", "status", "evidence",
   "feature", "subproduct", "brand",
+  "use_case_count", "recommendation_policy_count", "platform_agent_count", "platform_agent_score_count",
 ];
 
 // Best-effort mapping from a stat's key name to the section it summarizes,
@@ -88,7 +89,7 @@ function TopModelsLeaderboard() {
   const maxScore = top.length > 0 ? Number(top[0].aa_intelligence_index_score) : 1;
 
   return (
-    <div className="dash-panel dash-panel-wide">
+    <div className="dash-panel">
       <div className="dash-panel-head">
         <h2>Top Models · Intelligence Index</h2>
         <Link to="/models" className="dash-panel-more">See all →</Link>
@@ -124,6 +125,85 @@ function TopModelsLeaderboard() {
   );
 }
 
+// Top plans by Match Score (see RANK_PRESETS / bestModelScore / isFreePlan /
+// featureCoverage further down this file — reused here so the dashboard
+// preview and the full Plans ranking stay in sync). Uses the "balanced"
+// preset since the dashboard doesn't expose a preset picker. Free plans, and
+// plans missing a price, a scored model, or any tracked features, are
+// excluded from ranking entirely.
+function TopPlansLeaderboard() {
+  const { data, error, loading } = useApi("plans");
+  const preset = RANK_PRESETS.balanced;
+
+  const ranked = useMemo(() => {
+    const eligible = (data || []).filter(
+      (p) => p.base_price_usd_monthly != null && !isFreePlan(p) && bestModelScore(p) != null && featureCoverage(p) != null
+    );
+    if (eligible.length === 0) return [];
+    const scores = eligible.map(bestModelScore);
+    const prices = eligible.map((p) => Number(p.base_price_usd_monthly));
+    const minScore = Math.min(...scores);
+    const maxScore = Math.max(...scores);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const scoreRange = maxScore - minScore;
+    const priceRange = maxPrice - minPrice;
+
+    return eligible
+      .map((p) => {
+        const modelQuality = scoreRange === 0 ? 1 : (bestModelScore(p) - minScore) / scoreRange;
+        const affordability = priceRange === 0 ? 1 : 1 - (Number(p.base_price_usd_monthly) - minPrice) / priceRange;
+        const rankScore = preset.w1 * modelQuality + preset.w2 * affordability + preset.w3 * featureCoverage(p);
+        return { ...p, __rankScore: rankScore };
+      })
+      .sort((a, b) => b.__rankScore - a.__rankScore)
+      .slice(0, 8);
+  }, [data]);
+
+  const maxRankScore = ranked.length > 0 ? ranked[0].__rankScore : 1;
+
+  return (
+    <div className="dash-panel">
+      <div className="dash-panel-head">
+        <h2>Top Plans · Match Score</h2>
+        <Link to="/plans" className="dash-panel-more">See all →</Link>
+      </div>
+      <p className="dash-panel-note" title="Match Score blends how capable a plan's best accessible model is, how affordable the plan is, and how much of its tracked feature set it supports, normalized 0-100% against the other eligible plans. Free plans and plans missing a price, a scored model, or any tracked features aren't ranked.">
+        Blend of model quality, price &amp; feature coverage. Free plans excluded.
+      </p>
+      <Status loading={loading} error={error} />
+      {!loading && !error && ranked.length === 0 && <div className="empty">No rankable plans yet.</div>}
+      {ranked.length > 0 && (
+        <ol className="leaderboard">
+          {ranked.map((p, i) => {
+            const pct = maxRankScore > 0 ? Math.max(6, (p.__rankScore / maxRankScore) * 100) : 0;
+            return (
+              <li key={p.plan_id}>
+                <Link to={`/plans/${p.plan_id}`}>
+                  <span className="leaderboard-rank">{i + 1}</span>
+                  <span className="leaderboard-main">
+                    <span className="leaderboard-name-row">
+                      <span className="leaderboard-name">{p.brand_name} — {p.name}</span>
+                      <span className="leaderboard-score">{Math.round(p.__rankScore * 100)}%</span>
+                    </span>
+                    <span className="leaderboard-sub">
+                      {p.company_name}
+                      {p.base_price_usd_monthly != null ? ` · $${p.base_price_usd_monthly}/mo` : ""}
+                    </span>
+                    <span className="leaderboard-bar-track">
+                      <span className="leaderboard-bar-fill" style={{ width: `${pct}%` }} />
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 export function Dashboard() {
   return (
     <div>
@@ -132,14 +212,15 @@ export function Dashboard() {
 
       <DashboardStats />
 
-      <div className="dash-panels">
+      <div className="dash-panels dash-panels-cols-2">
         <TopModelsLeaderboard />
+        <TopPlansLeaderboard />
       </div>
       <p className="dash-attribution">
         Intelligence Index scores sourced from{" "}
         <a href="https://artificialanalysis.ai/" target="_blank" rel="noopener noreferrer">
           Artificial Analysis
-        </a>.
+        </a>. Match Score is a blend of model quality and plan price — see the Plans page for details.
       </p>
     </div>
   );
@@ -185,7 +266,6 @@ export function CompanyDetail() {
             items={data.brands}
             getKey={(b) => b.brand_id}
             getTitle={(b) => b.name}
-            getMeta={(b) => b.notes}
             getHref={(b) => `/brands/${b.brand_id}`}
           />
         </>
@@ -197,13 +277,41 @@ export function CompanyDetail() {
 // ---------------- Model Providers ----------------
 export function Providers() {
   const { data, error, loading } = useApi("providers");
+  const [types, setTypes] = useState([]);
+
+  const allTypes = useMemo(() => {
+    const names = new Set((data || []).map((p) => p.type).filter(Boolean));
+    return [...names].sort();
+  }, [data]);
+
+  const filteredRows = useMemo(() => {
+    let rows = data || [];
+    if (types.length > 0) rows = rows.filter((p) => types.includes(p.type));
+    return rows;
+  }, [data, types]);
+
   return (
     <div>
       <h1>Model Providers</h1>
       <p className="subtitle">Entities that provide AI models (listed separately from companies).</p>
       <Status loading={loading} error={error} />
+      <div className="filterbar">
+        <CheckboxDropdown
+          label="Type"
+          options={allTypes}
+          selected={types}
+          onChange={setTypes}
+          getKey={(t) => t}
+          getLabel={(t) => t}
+        />
+        {types.length > 0 && (
+          <button className="filter-clear" onClick={() => setTypes([])}>
+            Clear filters ({types.length})
+          </button>
+        )}
+      </div>
       <CardGrid
-        items={data}
+        items={filteredRows}
         getKey={(p) => p.provider_id}
         getTitle={(p) => p.name}
         getMeta={(p) => p.type}
@@ -247,21 +355,48 @@ export function ProviderDetail() {
 export function FamilyDetail() {
   const { id } = useParams();
   const { data, error, loading } = useApi(`families/${id}`);
+  const [statusFilter, setStatusFilter] = useState("");
 
   useSetPageMeta({
     label: data?.family?.name,
     upTo: data ? { path: `/providers/${data.family.provider_id}`, label: data.family.provider_name } : undefined,
   });
 
+  const allStatuses = useMemo(() => {
+    const names = new Set((data?.models || []).map((m) => m.status).filter(Boolean));
+    return [...names].sort();
+  }, [data]);
+
+  const filteredModels = useMemo(() => {
+    let rows = data?.models || [];
+    if (statusFilter) rows = rows.filter((m) => m.status === statusFilter);
+    return rows;
+  }, [data, statusFilter]);
+
   return (
     <div>
       <Status loading={loading} error={error} />
       {data && (
         <>
-          <h1>{data.family.name}</h1>
+          <h1>{data.family.name}<SourceLink url={data.family.evidence_url} /></h1>
           <p className="subtitle">{data.family.provider_name}{data.family.company_name ? ` · ${data.family.company_name}` : ""}</p>
           {data.family.grouping_note && <div className="detail-block">{data.family.grouping_note}</div>}
           <h2>Models</h2>
+          <div className="filterbar">
+            <select
+              className="filter-select"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="">Any status</option>
+              {allStatuses.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            {statusFilter && (
+              <button className="filter-clear" onClick={() => setStatusFilter("")}>Clear filter</button>
+            )}
+          </div>
           <DataTable
             columns={[
               { key: "version_name", label: "Version", sortable: true },
@@ -272,8 +407,9 @@ export function FamilyDetail() {
                 sortable: true,
                 sortValue: (m) => (m.aa_intelligence_index_score != null ? Number(m.aa_intelligence_index_score) : null),
               },
+              sourceColumn((m) => m.evidence_url),
             ]}
-            rows={data.models}
+            rows={filteredModels}
             rowKey={(m) => m.model_id}
             rowHref={(m) => `/models/${m.model_id}`}
           />
@@ -287,12 +423,56 @@ export function FamilyDetail() {
 export function ModelsBrowse() {
   const { data, error, loading } = useApi("models");
   const { toggle, isSelected } = useCompare();
+  const [providers, setProviders] = useState([]);
+  const [statuses, setStatuses] = useState([]);
+
+  const allProviders = useMemo(() => {
+    const names = new Set((data || []).map((m) => m.provider_name).filter(Boolean));
+    return [...names].sort();
+  }, [data]);
+
+  const allStatuses = useMemo(() => {
+    const names = new Set((data || []).map((m) => m.status).filter(Boolean));
+    return [...names].sort();
+  }, [data]);
+
+  const filteredRows = useMemo(() => {
+    let rows = data || [];
+    if (providers.length > 0) rows = rows.filter((m) => providers.includes(m.provider_name));
+    if (statuses.length > 0) rows = rows.filter((m) => statuses.includes(m.status));
+    return rows;
+  }, [data, providers, statuses]);
+
+  const activeFilterCount = providers.length + statuses.length;
 
   return (
     <div>
       <h1>All Models</h1>
       <p className="subtitle">Click a model to view its benchmark scores. Check up to 4 to compare, or click a column header to sort.</p>
       <Status loading={loading} error={error} />
+      <div className="filterbar">
+        <CheckboxDropdown
+          label="Provider"
+          options={allProviders}
+          selected={providers}
+          onChange={setProviders}
+          getKey={(p) => p}
+          getLabel={(p) => p}
+        />
+        <CheckboxDropdown
+          label="Status"
+          options={allStatuses}
+          selected={statuses}
+          onChange={setStatuses}
+          getKey={(s) => s}
+          getLabel={(s) => s}
+        />
+        {activeFilterCount > 0 && (
+          <button className="filter-clear" onClick={() => { setProviders([]); setStatuses([]); }}>
+            Clear filters ({activeFilterCount})
+          </button>
+        )}
+      </div>
       <DataTable
         columns={[
           { key: "version_name", label: "Model", sortable: true },
@@ -305,8 +485,9 @@ export function ModelsBrowse() {
             sortable: true,
             sortValue: (m) => (m.aa_intelligence_index_score != null ? Number(m.aa_intelligence_index_score) : null),
           },
+          sourceColumn((m) => m.evidence_url),
         ]}
-        rows={data}
+        rows={filteredRows}
         rowKey={(m) => m.model_id}
         rowHref={(m) => `/models/${m.model_id}`}
         selectable={{
@@ -322,6 +503,7 @@ export function ModelDetail() {
   const { id } = useParams();
   const { data, error, loading } = useApi(`models/${id}`);
   const { toggle, isSelected } = useCompare();
+  const [category, setCategory] = useState("");
 
   // The `models` row has its own cached summary columns (aa_intelligence_index_score,
   // performance_vs_* etc). Sometimes those are null even though the same number
@@ -344,6 +526,17 @@ export function ModelDetail() {
     upTo: data ? { path: `/families/${data.model.model_family_id}`, label: data.model.model_family_name } : undefined,
   });
 
+  const allCategories = useMemo(() => {
+    const names = new Set((data?.benchmarks || []).map((b) => b.benchmark_category).filter(Boolean));
+    return [...names].sort();
+  }, [data]);
+
+  const filteredBenchmarks = useMemo(() => {
+    let rows = data?.benchmarks || [];
+    if (category) rows = rows.filter((b) => b.benchmark_category === category);
+    return rows;
+  }, [data, category]);
+
   return (
     <div>
       <Status loading={loading} error={error} />
@@ -351,7 +544,7 @@ export function ModelDetail() {
         <>
           <div className="detail-header-row">
             <div>
-              <h1>{data.model.version_name}</h1>
+              <h1>{data.model.version_name}<SourceLink url={data.model.evidence_url} /></h1>
               <p className="subtitle">
                 <Link to={`/families/${data.model.model_family_id}`}>{data.model.model_family_name}</Link>
                 {" · "}
@@ -371,17 +564,33 @@ export function ModelDetail() {
             <KV pairs={[
               ["Status", data.model.status],
               ["AA Intelligence Index", aaIndex],
-              ["vs Opus 4.8", data.model.performance_vs_opus_4_8_pct != null ? `${data.model.performance_vs_opus_4_8_pct}%` : null],
-              ["vs GPT-5.6 Sol", data.model.performance_vs_gpt_5_6_sol_pct != null ? `${data.model.performance_vs_gpt_5_6_sol_pct}%` : null],
-              ["vs Fable 5", data.model.performance_vs_fable_5_pct != null ? `${data.model.performance_vs_fable_5_pct}%` : null],
+              ["vs Opus 4.8", data.model.aa_v4_1_vs_opus_4_8_pct != null ? <PctDiff value={data.model.aa_v4_1_vs_opus_4_8_pct} /> : null],
+              ["vs GPT-5.6 Sol", data.model.aa_v4_1_vs_gpt_5_6_sol_pct != null ? <PctDiff value={data.model.aa_v4_1_vs_gpt_5_6_sol_pct} /> : null],
+              ["vs Fable 5", data.model.aa_v4_1_vs_fable_5_pct != null ? <PctDiff value={data.model.aa_v4_1_vs_fable_5_pct} /> : null],
               ["Data last updated", lastUpdated],
+              ["Source", data.model.evidence_url ? "View evidence" : null, data.model.evidence_url],
             ]} />
           </div>
           <h2>Benchmark Scores</h2>
+          <div className="filterbar">
+            <select
+              className="filter-select"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+            >
+              <option value="">Any category</option>
+              {allCategories.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            {category && (
+              <button className="filter-clear" onClick={() => setCategory("")}>Clear filter</button>
+            )}
+          </div>
           <DataTable
             columns={[
               { key: "benchmark_name", label: "Benchmark", sortable: true },
-              { key: "benchmark_source_name", label: "Source", sortable: true },
+              { key: "benchmark_source_name", label: "Publisher", sortable: true },
               {
                 key: "score_value",
                 label: "Score",
@@ -391,8 +600,9 @@ export function ModelDetail() {
               },
               { key: "rank", label: "Rank" },
               { key: "as_of_date", label: "As of", sortable: true },
+              sourceColumn((r) => r.evidence_url),
             ]}
-            rows={data.benchmarks}
+            rows={filteredBenchmarks}
             rowKey={(b) => `${b.benchmark_id}-${b.model_id}`}
             rowHref={(b) => `/benchmarks/${b.benchmark_id}`}
           />
@@ -405,19 +615,66 @@ export function ModelDetail() {
 // ---------------- Benchmarks ----------------
 export function BenchmarksBrowse() {
   const { data, error, loading } = useApi("benchmarks");
+  const [categories, setCategories] = useState([]);
+  const [sources, setSources] = useState([]);
+
+  const allCategories = useMemo(() => {
+    const names = new Set((data || []).map((b) => b.category).filter(Boolean));
+    return [...names].sort();
+  }, [data]);
+
+  const allSources = useMemo(() => {
+    const names = new Set((data || []).map((b) => b.source_name).filter(Boolean));
+    return [...names].sort();
+  }, [data]);
+
+  const filteredRows = useMemo(() => {
+    let rows = data || [];
+    if (categories.length > 0) rows = rows.filter((b) => categories.includes(b.category));
+    if (sources.length > 0) rows = rows.filter((b) => sources.includes(b.source_name));
+    return rows;
+  }, [data, categories, sources]);
+
+  const activeFilterCount = categories.length + sources.length;
+
   return (
     <div>
       <h1>All Benchmarks</h1>
       <p className="subtitle">Click a column header to sort.</p>
       <Status loading={loading} error={error} />
+      <div className="filterbar">
+        <CheckboxDropdown
+          label="Category"
+          options={allCategories}
+          selected={categories}
+          onChange={setCategories}
+          getKey={(c) => c}
+          getLabel={(c) => c}
+        />
+        <CheckboxDropdown
+          label="Source"
+          options={allSources}
+          selected={sources}
+          onChange={setSources}
+          getKey={(s) => s}
+          getLabel={(s) => s}
+        />
+        {activeFilterCount > 0 && (
+          <button className="filter-clear" onClick={() => { setCategories([]); setSources([]); }}>
+            Clear filters ({activeFilterCount})
+          </button>
+        )}
+      </div>
       <DataTable
         columns={[
           { key: "name", label: "Benchmark", sortable: true },
           { key: "category", label: "Category", sortable: true },
+          { key: "source_name", label: "Source", sortable: true },
           { key: "scale_type", label: "Scale", sortable: true },
           { key: "unit_label", label: "Unit" },
+          sourceColumn((b) => b.definition_evidence_url),
         ]}
-        rows={data}
+        rows={filteredRows}
         rowKey={(b) => b.benchmark_id}
         rowHref={(b) => `/benchmarks/${b.benchmark_id}`}
       />
@@ -428,20 +685,47 @@ export function BenchmarksBrowse() {
 export function BenchmarkDetail() {
   const { id } = useParams();
   const { data, error, loading } = useApi(`benchmarks/${id}`);
+  const [provider, setProvider] = useState("");
 
   useSetPageMeta({
     label: data?.benchmark?.name,
     upTo: { path: "/benchmarks", label: "Benchmarks" },
   });
 
+  const allProviders = useMemo(() => {
+    const names = new Set((data?.scores || []).map((s) => s.provider_name).filter(Boolean));
+    return [...names].sort();
+  }, [data]);
+
+  const filteredScores = useMemo(() => {
+    let rows = data?.scores || [];
+    if (provider) rows = rows.filter((s) => s.provider_name === provider);
+    return rows;
+  }, [data, provider]);
+
   return (
     <div>
       <Status loading={loading} error={error} />
       {data && (
         <>
-          <h1>{data.benchmark.name}</h1>
+          <h1>{data.benchmark.name}<SourceLink url={data.benchmark.definition_evidence_url} /></h1>
           <p className="subtitle">{data.benchmark.category} · {data.benchmark.description}</p>
           <h2>Scores by Model</h2>
+          <div className="filterbar">
+            <select
+              className="filter-select"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+            >
+              <option value="">Any provider</option>
+              {allProviders.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+            {provider && (
+              <button className="filter-clear" onClick={() => setProvider("")}>Clear filter</button>
+            )}
+          </div>
           <DataTable
             columns={[
               { key: "model_name", label: "Model", sortable: true },
@@ -455,8 +739,9 @@ export function BenchmarkDetail() {
               },
               { key: "rank", label: "Rank" },
               { key: "as_of_date", label: "As of", sortable: true },
+              sourceColumn((r) => r.evidence_url),
             ]}
-            rows={data.scores}
+            rows={filteredScores}
             rowKey={(s) => s.model_id}
             rowHref={(s) => `/models/${s.model_id}`}
           />
@@ -491,7 +776,6 @@ export function BrandDetail() {
             items={data.subProducts}
             getKey={(s) => s.subproduct_id}
             getTitle={(s) => s.name}
-            getMeta={(s) => s.category}
             getHref={(s) => `/products/${s.subproduct_id}`}
           />
           <h2>Plans</h2>
@@ -500,7 +784,6 @@ export function BrandDetail() {
             items={data.plans}
             getKey={(p) => p.plan_id}
             getTitle={(p) => p.name}
-            getMeta={(p) => p.base_price_usd_monthly != null ? `$${p.base_price_usd_monthly}/mo` : p.audience}
             getHref={(p) => `/plans/${p.plan_id}`}
             selectable={{
               isSelected: (p) => isSelected("plan", p.plan_id),
@@ -637,7 +920,7 @@ function CheckboxDropdown({ label, options, selected, onChange, getKey, getLabel
   );
 }
 
-function ColumnPicker({ baseColumns, hiddenBase, onToggleBase, allFeatures, selectedFeatures, onToggleFeature }) {
+function ColumnPicker({ baseColumns, hiddenBase, onToggleBase, allFeatures, selectedFeatures, onToggleFeature, onReset }) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef(null);
 
@@ -649,7 +932,9 @@ function ColumnPicker({ baseColumns, hiddenBase, onToggleBase, allFeatures, sele
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
-  const shownCount = baseColumns.filter((c) => c.optional && !hiddenBase.includes(c.key)).length + selectedFeatures.length;
+  const optionalBaseColumns = baseColumns.filter((c) => c.optional);
+  const shownCount = optionalBaseColumns.filter((c) => !hiddenBase.includes(c.key)).length + selectedFeatures.length;
+  const canReset = hiddenBase.length > 0 || selectedFeatures.length > 0;
 
   return (
     <div className="col-picker" ref={boxRef}>
@@ -658,17 +943,19 @@ function ColumnPicker({ baseColumns, hiddenBase, onToggleBase, allFeatures, sele
       </button>
       {open && (
         <div className="col-picker-panel col-picker-panel-wide">
-          <div className="col-picker-section">Table columns</div>
-          {baseColumns.map((c) => (
-            <label className={`col-picker-item ${!c.optional ? "col-picker-item-locked" : ""}`} key={c.key}>
+          <div className="col-picker-section-row">
+            <div className="col-picker-section">Table columns</div>
+            <button className="col-picker-reset" onClick={onReset} disabled={!canReset}>Reset</button>
+          </div>
+          {optionalBaseColumns.length === 0 && <div className="col-picker-empty">No optional columns.</div>}
+          {optionalBaseColumns.map((c) => (
+            <label className="col-picker-item" key={c.key}>
               <input
                 type="checkbox"
-                checked={c.optional ? !hiddenBase.includes(c.key) : true}
-                disabled={!c.optional}
-                onChange={() => c.optional && onToggleBase(c.key)}
+                checked={!hiddenBase.includes(c.key)}
+                onChange={() => onToggleBase(c.key)}
               />
               <span>{c.label}</span>
-              {!c.optional && <span className="col-picker-cat">Always shown</span>}
             </label>
           ))}
           <div className="col-picker-section">Feature columns</div>
@@ -694,11 +981,39 @@ const EMPTY_FILTERS = {
   companies: [],
   audiences: [],
   freePaid: "all", // 'all' | 'free' | 'paid'
-  priceMin: "",
-  priceMax: "",
   feature: "",
   family: "",
 };
+
+// Weighted plan ranking: score = w1*model_quality + w2*affordability + w3*feature_coverage.
+// Only plans with a known price, at least one scored model, AND at least one
+// tracked feature are ranked; everything else is excluded rather than scored
+// as 0, since a missing signal isn't the same as a bad one.
+const RANK_PRESETS = {
+  value: { label: "Best Value", w1: 0.35, w2: 0.5, w3: 0.15 },
+  balanced: { label: "Balanced", w1: 0.4, w2: 0.4, w3: 0.2 },
+  capability: { label: "Best Capability", w1: 0.65, w2: 0.15, w3: 0.2 },
+  features: { label: "Most Features", w1: 0.2, w2: 0.2, w3: 0.6 },
+};
+
+function bestModelScore(p) {
+  const s = p.top_models?.[0]?.score;
+  return s != null ? Number(s) : null;
+}
+
+// Fraction of this plan's *tracked* features (i.e. ones with a known
+// supported: true/false, not just absent from the data) that are supported.
+// Already 0-1 by construction, so unlike model score / price it doesn't need
+// min/max normalization against the eligible set. Returns null — rather than
+// 0 — when nothing is tracked, so callers can exclude it the same way they
+// exclude missing price/model data instead of unfairly scoring it as "no
+// features".
+function featureCoverage(p) {
+  const tracked = (p.features || []).filter((f) => typeof f.supported === "boolean");
+  if (tracked.length === 0) return null;
+  const supported = tracked.filter((f) => f.supported).length;
+  return supported / tracked.length;
+}
 
 export function PlansBrowse() {
   const { data, error, loading } = useApi("plans");
@@ -707,6 +1022,14 @@ export function PlansBrowse() {
   const [hiddenBase, setHiddenBase] = useState([]);
   const [sort, setSort] = useState(null);
   const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [rankPreset, setRankPreset] = useState("none");
+
+  // A clicked column header would otherwise silently override the rank
+  // order (DataTable re-sorts whenever `sort` is non-null), so drop any
+  // active column sort the moment ranking turns on.
+  useEffect(() => {
+    if (rankPreset !== "none") setSort(null);
+  }, [rankPreset]);
 
   const toggleFeatureCol = (name) => {
     setSelectedFeatures((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
@@ -745,12 +1068,6 @@ export function PlansBrowse() {
     if (filters.audiences.length > 0) rows = rows.filter((p) => filters.audiences.includes(audienceCategory(p.audience)));
     if (filters.freePaid === "free") rows = rows.filter(isFreePlan);
     if (filters.freePaid === "paid") rows = rows.filter((p) => !isFreePlan(p));
-    if (filters.priceMin !== "") {
-      rows = rows.filter((p) => p.base_price_usd_monthly != null && Number(p.base_price_usd_monthly) >= Number(filters.priceMin));
-    }
-    if (filters.priceMax !== "") {
-      rows = rows.filter((p) => p.base_price_usd_monthly != null && Number(p.base_price_usd_monthly) <= Number(filters.priceMax));
-    }
     if (filters.feature) {
       rows = rows.filter((p) => p.features?.some((f) => f.feature_name === filters.feature && f.supported));
     }
@@ -764,10 +1081,42 @@ export function PlansBrowse() {
     filters.companies.length +
     filters.audiences.length +
     (filters.freePaid !== "all" ? 1 : 0) +
-    (filters.priceMin !== "" ? 1 : 0) +
-    (filters.priceMax !== "" ? 1 : 0) +
     (filters.feature ? 1 : 0) +
     (filters.family ? 1 : 0);
+
+  // Ranking runs on top of whatever's already filtered. Normalization
+  // (min/max) is computed only over the eligible subset, so an excluded
+  // plan's extreme price/score can't skew everyone else's scale.
+  const rankedResult = useMemo(() => {
+    if (rankPreset === "none") return null;
+    const preset = RANK_PRESETS[rankPreset];
+    const eligible = filteredRows.filter(
+      (p) => p.base_price_usd_monthly != null && !isFreePlan(p) && bestModelScore(p) != null && featureCoverage(p) != null
+    );
+    if (eligible.length === 0) {
+      return { rows: [], excludedCount: filteredRows.length };
+    }
+    const scores = eligible.map(bestModelScore);
+    const prices = eligible.map((p) => Number(p.base_price_usd_monthly));
+    const minScore = Math.min(...scores);
+    const maxScore = Math.max(...scores);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const scoreRange = maxScore - minScore;
+    const priceRange = maxPrice - minPrice;
+
+    const scored = eligible.map((p) => {
+      const modelQuality = scoreRange === 0 ? 1 : (bestModelScore(p) - minScore) / scoreRange;
+      const affordability = priceRange === 0 ? 1 : 1 - (Number(p.base_price_usd_monthly) - minPrice) / priceRange;
+      const featCoverage = featureCoverage(p);
+      const rankScore = preset.w1 * modelQuality + preset.w2 * affordability + preset.w3 * featCoverage;
+      return { ...p, __modelQuality: modelQuality, __affordability: affordability, __featureCoverage: featCoverage, __rankScore: rankScore };
+    });
+    scored.sort((a, b) => b.__rankScore - a.__rankScore);
+    return { rows: scored, excludedCount: filteredRows.length - eligible.length };
+  }, [filteredRows, rankPreset]);
+
+  const displayRows = rankedResult ? rankedResult.rows : filteredRows;
 
   const baseColumnDefs = useMemo(
     () => [
@@ -842,6 +1191,20 @@ export function PlansBrowse() {
           return best ? `${best.version_name} (${best.score ?? "—"})` : "";
         },
       },
+      {
+        key: "evidence_url",
+        label: "Source",
+        optional: true,
+        render: (p) =>
+          p.evidence_url ? (
+            <a className="evidence-link" href={p.evidence_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+              Source
+            </a>
+          ) : (
+            "—"
+          ),
+        exportValue: (p) => p.evidence_url || "",
+      },
     ],
     []
   );
@@ -870,17 +1233,40 @@ export function PlansBrowse() {
     return [...visibleBase, ...featureCols];
   }, [baseColumnDefs, hiddenBase, selectedFeatures]);
 
-  const sortedRows = useMemo(() => sortTableRows(filteredRows, columns, sort), [filteredRows, columns, sort]);
+  const displayColumns = useMemo(() => {
+    if (!rankedResult) return columns;
+    const rankCols = [
+      {
+        key: "__rank",
+        label: "#",
+        render: (p) => displayRows.indexOf(p) + 1,
+      },
+      {
+        key: "__rankScore",
+        label: "Match Score",
+        render: (p) => `${Math.round(p.__rankScore * 100)}%`,
+        exportValue: (p) => Math.round(p.__rankScore * 100),
+      },
+    ];
+    // Header clicks would otherwise call setSort and silently override the
+    // rank order, so columns are display-only (not sortable) while ranked.
+    return [...rankCols, ...columns.map((c) => ({ ...c, sortable: false }))];
+  }, [rankedResult, columns, displayRows]);
 
-  const handleExportCsv = () => exportToCsv(columns, sortedRows, "plans.csv");
-  const handleExportXlsx = () => exportToXlsx(columns, sortedRows, "plans.xlsx");
+  const sortedRows = useMemo(
+    () => (rankedResult ? displayRows : sortTableRows(filteredRows, columns, sort)),
+    [rankedResult, displayRows, filteredRows, columns, sort]
+  );
+
+  const handleExportCsv = () => exportToCsv(displayColumns, sortedRows, "plans.csv");
+  const handleExportXlsx = () => exportToXlsx(displayColumns, sortedRows, "plans.xlsx");
 
   return (
     <div>
       <h1>All Plans</h1>
       <p className="subtitle">Click a plan for pricing details, model access, and features. Check up to 4 to compare.</p>
 
-      <div className="plans-filterbar">
+      <div className="filterbar">
         <CheckboxDropdown
           label="Company"
           options={allCompanies}
@@ -906,23 +1292,6 @@ export function PlansBrowse() {
           <option value="free">Free only</option>
           <option value="paid">Paid only</option>
         </select>
-        <div className="filter-price-range">
-          <input
-            type="number"
-            className="filter-price-input"
-            placeholder="Min $"
-            value={filters.priceMin}
-            onChange={(e) => setFilters((f) => ({ ...f, priceMin: e.target.value }))}
-          />
-          <span>–</span>
-          <input
-            type="number"
-            className="filter-price-input"
-            placeholder="Max $"
-            value={filters.priceMax}
-            onChange={(e) => setFilters((f) => ({ ...f, priceMax: e.target.value }))}
-          />
-        </div>
         <select
           className="filter-select"
           value={filters.feature}
@@ -943,12 +1312,40 @@ export function PlansBrowse() {
             <option key={name} value={name}>{name}</option>
           ))}
         </select>
+        <select
+          className="filter-select"
+          value={rankPreset}
+          onChange={(e) => setRankPreset(e.target.value)}
+          title="Ranks eligible plans by a weighted mix of best accessible model quality, price, and feature coverage. Free plans, and plans with no known price, no scored model, or no tracked features, are excluded from the ranking."
+        >
+          <option value="none">Not ranked</option>
+          {Object.entries(RANK_PRESETS).map(([key, p]) => (
+            <option key={key} value={key}>Rank: {p.label}</option>
+          ))}
+        </select>
         {activeFilterCount > 0 && (
           <button className="filter-clear" onClick={() => setFilters(EMPTY_FILTERS)}>
             Clear filters ({activeFilterCount})
           </button>
         )}
       </div>
+
+      {rankedResult && (
+        <p className="subtitle">
+          <strong>Match Score</strong> ranks each plan by "{RANK_PRESETS[rankPreset].label}"
+          {" "}— a weighted blend of {Math.round(RANK_PRESETS[rankPreset].w1 * 100)}% best-accessible-model
+          quality, {Math.round(RANK_PRESETS[rankPreset].w2 * 100)}% affordability, and{" "}
+          {Math.round(RANK_PRESETS[rankPreset].w3 * 100)}% feature coverage (share of this plan's tracked
+          features that are supported). Quality and affordability are normalized 0–1 against the other
+          eligible plans shown here; feature coverage is already 0–1 per plan. The three are combined into
+          a single 0–100% score
+          ({displayRows.length} eligible plan{displayRows.length === 1 ? "" : "s"}
+          {rankedResult.excludedCount > 0
+            ? `, ${rankedResult.excludedCount} excluded — free plans, or plans missing a known price, a scored model, or any tracked features, aren't ranked`
+            : ""}
+          ).
+        </p>
+      )}
 
       <div className="plans-toolbar">
         <ColumnPicker
@@ -958,6 +1355,7 @@ export function PlansBrowse() {
           allFeatures={allFeatures}
           selectedFeatures={selectedFeatures}
           onToggleFeature={toggleFeatureCol}
+          onReset={() => { setHiddenBase([]); setSelectedFeatures([]); }}
         />
         <div className="plans-toolbar-export">
           <button className="export-btn" onClick={handleExportCsv} disabled={sortedRows.length === 0}>
@@ -970,13 +1368,17 @@ export function PlansBrowse() {
       </div>
 
       <Status loading={loading} error={error} />
-      {!loading && !error && data && filteredRows.length === 0 && (
-        <div className="empty">No plans match the current filters.</div>
+      {!loading && !error && data && displayRows.length === 0 && (
+        <div className="empty">
+          {rankedResult
+            ? "No plans are eligible for ranking (need both a known price and a scored model)."
+            : "No plans match the current filters."}
+        </div>
       )}
-      {filteredRows.length > 0 && (
+      {displayRows.length > 0 && (
         <DataTable
-          columns={columns}
-          rows={filteredRows}
+          columns={displayColumns}
+          rows={displayRows}
           rowKey={(p) => p.plan_id}
           rowHref={(p) => `/plans/${p.plan_id}`}
           sort={sort}
@@ -1012,7 +1414,7 @@ export function PlanDetail() {
                 <Link to={`/brands/${data.plan.brand_id}`}>{data.plan.brand_name}</Link>
                 {" · "}{data.plan.audience}
               </p>
-              <h1>{data.plan.name}</h1>
+              <h1>{data.plan.name}<SourceLink url={data.plan.evidence_url} /></h1>
               <label className="compare-toggle">
                 <input
                   type="checkbox"
@@ -1037,19 +1439,20 @@ export function PlanDetail() {
               ["Best suited for", data.plan.best_suited_for],
               ["Model access summary", data.plan.model_access_summary],
               ["Not included", data.plan.not_included],
+              ["Source", data.plan.evidence_url ? "View evidence" : null, data.plan.evidence_url],
             ]} />
           </div>
 
           <h2>Model Access (plan_models)</h2>
-          <p className="subtitle">Click a row to see the model family and its models.</p>
+          <p className="subtitle">Generally available model families only. Click a row to see the model family and its models.</p>
           <DataTable
             columns={[
               { key: "model_family_name", label: "Model Family", sortable: true },
               { key: "provider_name", label: "Provider", sortable: true },
-              { key: "status_label", label: "Status", sortable: true },
               { key: "directly_selectable", label: "Directly selectable", render: (r) => <Bool value={r.directly_selectable} /> },
+              sourceColumn((r) => r.evidence_url),
             ]}
-            rows={data.modelAccess}
+            rows={(data.modelAccess || []).filter((m) => (m.status_label || "").toLowerCase().includes("generally available"))}
             rowKey={(m) => m.plan_family_access_id}
             rowHref={(m) => `/families/${m.model_family_id}`}
           />
@@ -1061,6 +1464,7 @@ export function PlanDetail() {
               { key: "feature_category", label: "Category", sortable: true },
               { key: "supported", label: "Supported", render: (r) => <Bool value={r.supported} /> },
               { key: "support_note", label: "Notes" },
+              sourceColumn((r) => r.evidence_url),
             ]}
             rows={data.features}
             rowKey={(f) => f.feature_name}
@@ -1084,9 +1488,9 @@ const MODEL_ROWS = [
       return m.model.aa_intelligence_index_score ?? fromBenchmarks ?? null;
     },
   },
-  { key: "vs_opus", label: "vs Opus 4.8", get: (m) => (m.model.performance_vs_opus_4_8_pct != null ? `${m.model.performance_vs_opus_4_8_pct}%` : null) },
-  { key: "vs_gpt", label: "vs GPT-5.6 Sol", get: (m) => (m.model.performance_vs_gpt_5_6_sol_pct != null ? `${m.model.performance_vs_gpt_5_6_sol_pct}%` : null) },
-  { key: "vs_fable", label: "vs Fable 5", get: (m) => (m.model.performance_vs_fable_5_pct != null ? `${m.model.performance_vs_fable_5_pct}%` : null) },
+  { key: "vs_opus", label: "vs Opus 4.8", get: (m) => (m.model.aa_v4_1_vs_opus_4_8_pct != null ? <PctDiff value={m.model.aa_v4_1_vs_opus_4_8_pct} /> : null) },
+  { key: "vs_gpt", label: "vs GPT-5.6 Sol", get: (m) => (m.model.aa_v4_1_vs_gpt_5_6_sol_pct != null ? <PctDiff value={m.model.aa_v4_1_vs_gpt_5_6_sol_pct} /> : null) },
+  { key: "vs_fable", label: "vs Fable 5", get: (m) => (m.model.aa_v4_1_vs_fable_5_pct != null ? <PctDiff value={m.model.aa_v4_1_vs_fable_5_pct} /> : null) },
   {
     key: "last_updated",
     label: "Data last updated",

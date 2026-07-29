@@ -129,20 +129,78 @@ function RowLink({ to, children }) {
   return cloneElement(children, { onClick: () => navigate(to) });
 }
 
+// Formats a raw performance-delta percentage (e.g. aa_v4_1_vs_opus_4_8_pct,
+// which comes out of the DB with long floating-point tails like
+// 0.05357142857142857142857142857143) into something readable: rounded to
+// one decimal, signed, and colored so a glance tells you better vs worse.
+export function PctDiff({ value }) {
+  if (value === null || value === undefined || value === "") return <span>—</span>;
+  const n = Number(value);
+  if (Number.isNaN(n)) return <span>—</span>;
+  const rounded = Math.round(n * 10) / 10;
+  const sign = rounded > 0 ? "+" : "";
+  const cls = rounded > 0 ? "pct-diff pct-diff-pos" : rounded < 0 ? "pct-diff pct-diff-neg" : "pct-diff pct-diff-flat";
+  return <span className={cls}>{sign}{rounded}%</span>;
+}
+
 export function Bool({ value }) {
   if (value === null || value === undefined) return <span className="badge">—</span>;
   return <span className={`badge ${value ? "yes" : "no"}`}>{value ? "Yes" : "No"}</span>;
 }
 
+// pairs: [label, value] or [label, value, evidenceUrl]. When an evidenceUrl
+// is given, the value itself becomes the link (dotted underline) rather than
+// adding a separate icon — keeps the KV block visually unchanged otherwise.
 export function KV({ pairs }) {
   return (
     <div className="kv">
-      {pairs.filter(([, v]) => v !== undefined).map(([k, v]) => (
+      {pairs.filter(([, v]) => v !== undefined).map(([k, v, evidenceUrl]) => (
         <div className="kv-row" style={{ display: "contents" }} key={k}>
           <div className="k">{k}</div>
-          <div>{v === null || v === "" ? "—" : String(v)}</div>
+          <div>
+            {v === null || v === "" ? (
+              "—"
+            ) : evidenceUrl ? (
+              <a className="evidence-link" href={evidenceUrl} target="_blank" rel="noopener noreferrer">
+                {v}
+              </a>
+            ) : (
+              v
+            )}
+          </div>
         </div>
       ))}
     </div>
   );
+}
+
+// Small muted "Source" link for placing next to a page's h1/title, used for
+// records that carry a single evidence_id for the whole entity (model, plan,
+// family, ...). Renders nothing if there's no URL.
+export function SourceLink({ url, className = "detail-source-link" }) {
+  if (!url) return null;
+  return (
+    <a className={className} href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+      Source
+    </a>
+  );
+}
+
+// Column factory for DataTable — adds a dedicated "Source" column that links
+// to each row's evidence_url. getUrl(row) should return the url or null.
+export function sourceColumn(getUrl) {
+  return {
+    key: "__source",
+    label: "Source",
+    render: (row) => {
+      const url = getUrl(row);
+      return url ? (
+        <a className="evidence-link" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+          Source
+        </a>
+      ) : (
+        "—"
+      );
+    },
+  };
 }

@@ -96,7 +96,7 @@ th.sortable:hover { color: var(--accent); }
 .select-col { width: 32px; }
 
 /* ---- Plans page filter bar ---- */
-.plans-filterbar {
+.filterbar {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -124,22 +124,6 @@ th.sortable:hover { color: var(--accent); }
   color: var(--text);
   border-radius: 20px;
   padding: 6px 14px;
-  font-size: 12px;
-}
-.filter-price-range {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-dim);
-  font-size: 12px;
-}
-.filter-price-input {
-  width: 70px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 20px;
-  padding: 6px 10px;
   font-size: 12px;
 }
 .filter-clear {
@@ -214,6 +198,24 @@ th.sortable:hover { color: var(--accent); }
   color: var(--text-dim);
   padding: 8px 8px 4px;
 }
+.col-picker-section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.col-picker-section-row .col-picker-section { padding: 8px 8px 4px 8px; }
+.col-picker-reset {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.col-picker-reset:hover:not(:disabled) { text-decoration: underline; }
+.col-picker-reset:disabled { color: var(--text-dim); cursor: not-allowed; opacity: 0.6; }
 .col-picker-item-locked { opacity: 0.6; cursor: default; }
 .col-picker-item-locked:hover { background: none; }
 .col-picker-item {
@@ -390,6 +392,11 @@ th.sortable:hover { color: var(--accent); }
   padding: 18px 20px;
 }
 .dash-panel-wide { padding: 20px 24px; }
+.dash-panels-cols-2 { grid-template-columns: 1fr 1fr; }
+@media (max-width: 860px) {
+  .dash-panels-cols-2 { grid-template-columns: 1fr; }
+}
+.dash-panel-note { font-size: 12px; color: var(--text-dim); margin: 0 0 10px; }
 .dash-panel-head {
   display: flex;
   align-items: baseline;
@@ -589,6 +596,11 @@ tr.clickable:hover { background: var(--row-hover); cursor: pointer; }
 .badge.yes { color: var(--badge-yes-text); border-color: var(--badge-yes-border); }
 .badge.no { color: var(--badge-no-text); border-color: var(--badge-no-border); }
 
+.pct-diff { font-variant-numeric: tabular-nums; font-weight: 600; }
+.pct-diff-pos { color: var(--badge-yes-text); }
+.pct-diff-neg { color: var(--badge-no-text); }
+.pct-diff-flat { color: var(--text-dim); font-weight: 400; }
+
 .detail-block {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -601,3 +613,33 @@ tr.clickable:hover { background: var(--row-hover); cursor: pointer; }
 
 .loading, .empty { color: var(--text-dim); font-size: 13px; padding: 20px 0; }
 .error { color: var(--badge-no-text); }
+
+/* ---- Evidence links ---- */
+/* Inline in KV: the value itself becomes the link, no icon — dotted
+   underline signals "sourced" without adding visual weight. */
+.evidence-link {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--text-dim);
+}
+.evidence-link:hover {
+  color: var(--accent);
+  text-decoration-style: solid;
+  text-decoration-color: var(--accent);
+}
+
+/* Muted "Source" link next to a detail page's title, for entities with a
+   single evidence_id covering the whole record. */
+.detail-source-link {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  margin-left: 8px;
+}
+.detail-source-link:hover {
+  color: var(--accent);
+  text-decoration-style: solid;
+}

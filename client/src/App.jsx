@@ -13,7 +13,7 @@ import { useApi } from "./useApi";
 function getInitialTheme() {
   const stored = localStorage.getItem("theme");
   if (stored === "light" || stored === "dark") return stored;
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  return "light";
 }
 
 // Relies on useApi's shared cache — these lists get fetched once (10 min TTL)
