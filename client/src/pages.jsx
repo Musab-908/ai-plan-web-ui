@@ -16,7 +16,7 @@ const DASH_STAT_EXCLUDE = [
   "platform_model_record", "platform_feature_record",
   "plan_model_access", "plan_entitlement", "status", "evidence",
   "feature", "subproduct", "brand",
-  "use_case_count", "recommendation_policy_count", "platform_agent_count", "platform_agent_score_count",
+  "use_case_count", "recommendation_policy_count",
 ];
 
 // Best-effort mapping from a stat's key name to the section it summarizes,
@@ -568,6 +568,7 @@ export function ModelDetail() {
               ["vs GPT-5.6 Sol", data.model.aa_v4_1_vs_gpt_5_6_sol_pct != null ? <PctDiff value={data.model.aa_v4_1_vs_gpt_5_6_sol_pct} /> : null],
               ["vs Fable 5", data.model.aa_v4_1_vs_fable_5_pct != null ? <PctDiff value={data.model.aa_v4_1_vs_fable_5_pct} /> : null],
               ["Data last updated", lastUpdated],
+              ["Underlying model", data.model.underlying_model_summary, data.model.underlying_model_evidence_url],
               ["Source", data.model.evidence_url ? "View evidence" : null, data.model.evidence_url],
             ]} />
           </div>
@@ -829,12 +830,14 @@ export function ProductDetail() {
               <h2>Model Access</h2>
               <DataTable
                 columns={[
+                  { key: "model_name", label: "Model" },
                   { key: "family_name", label: "Model Family" },
                   { key: "provider_name", label: "Provider" },
-                  { key: "status_label", label: "Status" },
+                  { key: "directly_selectable", label: "Directly Selectable", render: (m) => <Bool value={m.directly_selectable} /> },
+                  { key: "counts_as_current", label: "Counts as Current", render: (m) => <Bool value={m.counts_as_current} /> },
                 ]}
                 rows={data.models}
-                rowKey={(m) => `${m.platform_id}-${m.model_family_id}`}
+                rowKey={(m) => `${m.platform_id}-${m.model_id}`}
                 rowHref={(m) => `/families/${m.model_family_id}`}
               />
             </>
@@ -1330,6 +1333,49 @@ export function PlansBrowse() {
         )}
       </div>
 
+      <details className="rank-formula">
+        <summary>How is Match Score calculated?</summary>
+        <div className="rank-formula-body">
+          <p className="rank-formula-eq">
+            Match Score = (w<sub>1</sub>&nbsp;×&nbsp;modelQuality + w<sub>2</sub>&nbsp;×&nbsp;affordability + w<sub>3</sub>&nbsp;×&nbsp;featureCoverage) × 100
+          </p>
+          <ul>
+            <li>
+              <strong>modelQuality</strong> = (planScore − minScore) / (maxScore − minScore) — planScore is the
+              AA Intelligence Index of the plan's best accessible model; min/max are taken across the other
+              eligible plans currently shown, so the weakest gets 0 and the strongest gets 1.
+            </li>
+            <li>
+              <strong>affordability</strong> = 1 − (planPrice − minPrice) / (maxPrice − minPrice) — the cheapest
+              eligible plan shown scores 1, the priciest scores 0.
+            </li>
+            <li>
+              <strong>featureCoverage</strong> = supported tracked features ÷ total tracked features for that
+              plan — already 0–1 per plan, so it isn't normalized against the other plans the way the first two are.
+            </li>
+          </ul>
+          <table className="rank-formula-weights">
+            <thead>
+              <tr><th>Preset</th><th>w₁ Model quality</th><th>w₂ Affordability</th><th>w₃ Feature coverage</th></tr>
+            </thead>
+            <tbody>
+              {Object.entries(RANK_PRESETS).map(([key, p]) => (
+                <tr key={key}>
+                  <td>{p.label}</td>
+                  <td>{Math.round(p.w1 * 100)}%</td>
+                  <td>{Math.round(p.w2 * 100)}%</td>
+                  <td>{Math.round(p.w3 * 100)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="rank-formula-note">
+            A plan that's free, or missing a known price, a scored model, or any tracked features, is excluded
+            from ranking entirely rather than scored as 0 — a missing signal isn't the same as a bad one.
+          </p>
+        </div>
+      </details>
+
       {rankedResult && (
         <p className="subtitle">
           <strong>Match Score</strong> ranks each plan by "{RANK_PRESETS[rankPreset].label}"
@@ -1443,18 +1489,20 @@ export function PlanDetail() {
             ]} />
           </div>
 
-          <h2>Model Access (plan_models)</h2>
-          <p className="subtitle">Generally available model families only. Click a row to see the model family and its models.</p>
+          <h2>Model Access (plan_model_access)</h2>
+          <p className="subtitle">All models this plan grants access to. Click a row to see the model's details and benchmarks.</p>
           <DataTable
             columns={[
+              { key: "model_name", label: "Model", sortable: true },
               { key: "model_family_name", label: "Model Family", sortable: true },
               { key: "provider_name", label: "Provider", sortable: true },
+              { key: "status_label", label: "Status", sortable: true },
               { key: "directly_selectable", label: "Directly selectable", render: (r) => <Bool value={r.directly_selectable} /> },
               sourceColumn((r) => r.evidence_url),
             ]}
-            rows={(data.modelAccess || []).filter((m) => (m.status_label || "").toLowerCase().includes("generally available"))}
+            rows={data.modelAccess || []}
             rowKey={(m) => m.plan_model_access_id}
-            rowHref={(m) => `/families/${m.model_family_id}`}
+            rowHref={(m) => `/models/${m.model_id}`}
           />
 
           <h2>Features (plan_features)</h2>

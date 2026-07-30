@@ -78,24 +78,12 @@ app.get("/api/providers/:id", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// AA Intelligence Index sometimes lives only in benchmark_scores (as the
-// "Artificial Analysis Intelligence Index" row) and not in the models
-// table's own cached column. COALESCE against the newest matching score so
-// every endpoint that shows this number agrees, instead of patching it in
-// the client per page.
-const AA_INDEX_FALLBACK = `
-  coalesce(
-    m.aa_v4_1_score,
-    (
-      select bs.score_value
-      from ${S}.benchmark_scores bs
-      where bs.model_id = m.model_id
-        and bs.benchmark_name ilike '%artificial analysis intelligence index%'
-      order by bs.as_of_date desc nulls last
-      limit 1
-    )
-  ) as aa_intelligence_index_score
-`;
+// The `models`/`model_scores` views now resolve this via an exact
+// benchmark_id join (BM-AA-INTELLIGENCE-INDEX) inside the view itself, so
+// m.aa_v4_1_score is already the right number — just alias it consistently
+// as aa_intelligence_index_score everywhere so the client doesn't need to
+// know the underlying column name changed.
+const AA_INDEX_SELECT = `m.aa_v4_1_score as aa_intelligence_index_score`;
 
 // ---------- Model Families ----------
 app.get("/api/families/:id", async (req, res, next) => {
@@ -103,7 +91,7 @@ app.get("/api/families/:id", async (req, res, next) => {
     const family = await one(`select * from ${S}.model_families where model_family_id = $1`, [req.params.id]);
     if (!family) return res.status(404).json({ error: "not found" });
     const models = await q(
-      `select m.*, ${AA_INDEX_FALLBACK}
+      `select m.*, ${AA_INDEX_SELECT}
        from ${S}.models m
        where m.model_family_id = $1
        order by m.version_name`,
@@ -118,7 +106,7 @@ app.get("/api/models", async (req, res, next) => {
   try {
     res.json(
       await q(
-        `select m.*, ${AA_INDEX_FALLBACK}
+        `select m.*, ${AA_INDEX_SELECT}
          from ${S}.models m
          order by m.model_family_name, m.version_name`
       )
@@ -129,7 +117,7 @@ app.get("/api/models", async (req, res, next) => {
 app.get("/api/models/:id", async (req, res, next) => {
   try {
     const model = await one(
-      `select m.*, ${AA_INDEX_FALLBACK} from ${S}.models m where m.model_id = $1`,
+      `select m.*, ${AA_INDEX_SELECT} from ${S}.models m where m.model_id = $1`,
       [req.params.id]
     );
     if (!model) return res.status(404).json({ error: "not found" });
@@ -163,16 +151,18 @@ app.get("/api/benchmarks/:id", async (req, res, next) => {
 // ---------- Plans (browse all, cheapest first) ----------
 // Enriched with: company name (via brand), a deduped feature list, the top 3
 // individual models the plan grants access to (best-scoring model per
-// accessible family, then top 3 of those overall) ranked by AA Intelligence
+// accessible family, picked from the specific models the plan actually
+// grants access to now that plan_model_access is model-level rather than
+// family-level, then top 3 of those overall) ranked by AA Intelligence
 // Index, and the full list of accessible family names (used for filtering,
-// unlike the capped top-3 used for display) — reusing AA_INDEX_FALLBACK so
+// unlike the capped top-3 used for display) — reusing AA_INDEX_SELECT so
 // scores agree with what the model/family pages show.
 app.get("/api/plans", async (req, res, next) => {
   try {
     res.json(
       await q(`
         with model_scores as (
-          select m.model_id, m.model_family_id, m.model_family_name, m.version_name, ${AA_INDEX_FALLBACK}
+          select m.model_id, ${AA_INDEX_SELECT}
           from ${S}.models m
         )
         select
@@ -199,13 +189,16 @@ app.get("/api/plans", async (req, res, next) => {
           from (
             select fam_best.model_id, fam_best.version_name, fam_best.score
             from (
+              -- Per family, prefer a model the plan actually lets you pick
+              -- (directly_selectable) over one that merely "counts as
+              -- current" (e.g. routed/inferred access), then rank by score.
               select distinct on (pm.model_family_id)
-                pm.model_family_id, ms.model_id, ms.version_name, ms.aa_intelligence_index_score as score
+                pm.model_family_id, pm.model_id, pm.model_name as version_name, ms.aa_intelligence_index_score as score
               from ${S}.plan_models pm
-              left join model_scores ms on ms.model_family_id = pm.model_family_id
+              left join model_scores ms on ms.model_id = pm.model_id
               where pm.plan_id = p.plan_id
-                and coalesce(pm.status_label, '') not ilike 'not available'
-              order by pm.model_family_id, ms.aa_intelligence_index_score desc nulls last
+                and coalesce(pm.counts_as_current, true)
+              order by pm.model_family_id, pm.directly_selectable desc nulls last, ms.aa_intelligence_index_score desc nulls last
             ) fam_best
             order by fam_best.score desc nulls last
             limit 3
@@ -215,7 +208,7 @@ app.get("/api/plans", async (req, res, next) => {
           select coalesce(json_agg(distinct pm.model_family_name), '[]'::json) as accessible_families
           from ${S}.plan_models pm
           where pm.plan_id = p.plan_id
-            and coalesce(pm.status_label, '') not ilike 'not available'
+            and coalesce(pm.counts_as_current, true)
         ) accfam on true
         order by p.base_price_usd_monthly asc nulls last, p.name
       `)
@@ -246,7 +239,7 @@ app.get("/api/products/:id", async (req, res, next) => {
     const models = await q(
       `select * from ${S}.platform_models
        where subproduct_id = $1
-         and coalesce(status_label, '') not ilike 'not available'
+         and coalesce(counts_as_current, true)
        order by family_name`,
       [req.params.id]
     );
@@ -262,8 +255,8 @@ app.get("/api/plans/:id", async (req, res, next) => {
     const modelAccess = await q(
       `select * from ${S}.plan_models
        where plan_id = $1
-         and coalesce(status_label, '') not ilike 'not available'
-       order by model_family_name`,
+         and coalesce(counts_as_current, true)
+       order by directly_selectable desc nulls last, model_family_name`,
       [req.params.id]
     );
     const features = await q(

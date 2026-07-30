@@ -137,7 +137,10 @@ export function PctDiff({ value }) {
   if (value === null || value === undefined || value === "") return <span>—</span>;
   const n = Number(value);
   if (Number.isNaN(n)) return <span>—</span>;
-  const rounded = Math.round(n * 10) / 10;
+  // value is a raw fraction (score_diff / referenceScore) straight from the
+  // DB, e.g. -0.267857142857 for a model scoring 26.8% below the reference
+  // model — so it needs to be scaled to a percentage before display.
+  const rounded = Math.round(n * 1000) / 10;
   const sign = rounded > 0 ? "+" : "";
   const cls = rounded > 0 ? "pct-diff pct-diff-pos" : rounded < 0 ? "pct-diff pct-diff-neg" : "pct-diff pct-diff-flat";
   return <span className={cls}>{sign}{rounded}%</span>;

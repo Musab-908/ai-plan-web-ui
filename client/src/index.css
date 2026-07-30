@@ -598,6 +598,39 @@ tr.clickable:hover { background: var(--row-hover); cursor: pointer; }
 
 .pct-diff { font-variant-numeric: tabular-nums; font-weight: 600; }
 .pct-diff-pos { color: var(--badge-yes-text); }
+
+.rank-formula {
+  margin: 0 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--panel-bg, transparent);
+}
+.rank-formula summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  list-style: none;
+}
+.rank-formula summary::-webkit-details-marker { display: none; }
+.rank-formula summary::before { content: "▸ "; }
+.rank-formula[open] summary::before { content: "▾ "; }
+.rank-formula-body { margin-top: 12px; font-size: 13px; }
+.rank-formula-eq {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  background: var(--row-hover);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0 0 12px;
+}
+.rank-formula-body ul { margin: 0 0 12px; padding-left: 18px; }
+.rank-formula-body li { margin-bottom: 6px; color: var(--text-dim); }
+.rank-formula-body li strong { color: var(--text); }
+.rank-formula-weights { margin-bottom: 10px; font-size: 12px; }
+.rank-formula-weights th, .rank-formula-weights td { padding: 6px 10px; }
+.rank-formula-note { color: var(--text-dim); font-size: 12px; margin: 0; }
 .pct-diff-neg { color: var(--badge-no-text); }
 .pct-diff-flat { color: var(--text-dim); font-weight: 400; }
 
