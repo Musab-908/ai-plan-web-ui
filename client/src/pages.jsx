@@ -782,9 +782,17 @@ export function BrandDetail() {
           <h2>Plans</h2>
           <p className="subtitle">Check up to 4 to compare plans.</p>
           <CardGrid
-            items={data.plans}
+            items={[...(data.plans || [])].sort((a, b) => {
+              const av = a.base_price_usd_monthly != null ? Number(a.base_price_usd_monthly) : null;
+              const bv = b.base_price_usd_monthly != null ? Number(b.base_price_usd_monthly) : null;
+              if (av == null && bv == null) return 0;
+              if (av == null) return 1; // custom/null pricing sorts last
+              if (bv == null) return -1;
+              return av - bv;
+            })}
             getKey={(p) => p.plan_id}
             getTitle={(p) => p.name}
+            getMeta={(p) => (isFreePlan(p) ? "Free" : p.base_price_usd_monthly != null ? `$${p.base_price_usd_monthly}/mo` : "Custom")}
             getHref={(p) => `/plans/${p.plan_id}`}
             selectable={{
               isSelected: (p) => isSelected("plan", p.plan_id),
