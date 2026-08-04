@@ -4,6 +4,7 @@ import {
   Dashboard, Companies, CompanyDetail, Providers, ProviderDetail,
   FamilyDetail, ModelsBrowse, ModelDetail, BenchmarksBrowse, BenchmarkDetail,
   BrandDetail, ProductDetail, PlanDetail, PlansBrowse, ComparePage,
+  Rankings,
 } from "./pages";
 import { CompareProvider } from "./compareContext";
 import { PageMetaProvider, usePageMeta } from "./pageMetaContext";
@@ -137,6 +138,7 @@ function Topbar({ theme, onToggleTheme }) {
         <Link to="/providers">Providers</Link>
         <Link to="/models">Models</Link>
         <Link to="/plans">Plans</Link>
+        <Link to="/rankings">Rankings</Link>
         <Link to="/benchmarks">Benchmarks</Link>
       </nav>
 
@@ -186,6 +188,7 @@ export default function App() {
                 <Route path="/products/:id" element={<ProductDetail />} />
                 <Route path="/plans" element={<PlansBrowse />} />
                 <Route path="/plans/:id" element={<PlanDetail />} />
+                <Route path="/rankings" element={<Rankings />} />
                 <Route path="/compare" element={<ComparePage />} />
               </Routes>
             </div>

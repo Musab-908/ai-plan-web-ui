@@ -162,7 +162,7 @@ app.get("/api/plans", async (req, res, next) => {
     res.json(
       await q(`
         with model_scores as (
-          select m.model_id, ${AA_INDEX_SELECT}
+          select m.model_id, ${AA_INDEX_SELECT}, m.aa_cost_per_task_usd as cost_per_task_usd
           from ${S}.models m
         )
         select
@@ -171,6 +171,8 @@ app.get("/api/plans", async (req, res, next) => {
           co.name as company_name,
           feats.features,
           topm.top_models,
+          topm.best_model_quality_score,
+          topm.best_model_cost_per_task_usd,
           accfam.accessible_families
         from ${S}.plan_records p
         left join ${S}.brands b on b.brand_id = p.brand_id
@@ -185,15 +187,24 @@ app.get("/api/plans", async (req, res, next) => {
           ) t
         ) feats on true
         left join lateral (
-          select coalesce(json_agg(z order by z.score desc nulls last), '[]'::json) as top_models
+          select
+            coalesce(json_agg(z order by z.score desc nulls last), '[]'::json) as top_models,
+            -- z is already capped to the top 3 (ordered by score desc), so
+            -- the first element is the plan's single best accessible model.
+            -- Pulling score+cost from that same row (not a separate
+            -- cheapest-model query) keeps the two numbers describing one
+            -- consistent model.
+            (array_agg(z.score order by z.score desc nulls last))[1] as best_model_quality_score,
+            (array_agg(z.cost_per_task_usd order by z.score desc nulls last))[1] as best_model_cost_per_task_usd
           from (
-            select fam_best.model_id, fam_best.version_name, fam_best.score
+            select fam_best.model_id, fam_best.version_name, fam_best.score, fam_best.cost_per_task_usd
             from (
               -- Per family, prefer a model the plan actually lets you pick
               -- (directly_selectable) over one that merely "counts as
               -- current" (e.g. routed/inferred access), then rank by score.
               select distinct on (pm.model_family_id)
-                pm.model_family_id, pm.model_id, pm.model_name as version_name, ms.aa_intelligence_index_score as score
+                pm.model_family_id, pm.model_id, pm.model_name as version_name,
+                ms.aa_intelligence_index_score as score, ms.cost_per_task_usd as cost_per_task_usd
               from ${S}.plan_models pm
               left join model_scores ms on ms.model_id = pm.model_id
               where pm.plan_id = p.plan_id
@@ -252,6 +263,31 @@ app.get("/api/plans/:id", async (req, res, next) => {
   try {
     const plan = await one(`select * from ${S}.plan_records where plan_id = $1`, [req.params.id]);
     if (!plan) return res.status(404).json({ error: "not found" });
+    // Same "best accessible model" resolution as GET /api/plans (per-family
+    // best, preferring directly_selectable, ranked by AA Intelligence Index,
+    // then take the single top row) so both endpoints agree.
+    const best = await one(
+      `with model_scores as (
+         select m.model_id, ${AA_INDEX_SELECT}, m.aa_cost_per_task_usd as cost_per_task_usd
+         from ${S}.models m
+       )
+       select fam_best.score as best_model_quality_score,
+              fam_best.cost_per_task_usd as best_model_cost_per_task_usd
+       from (
+         select distinct on (pm.model_family_id)
+           pm.model_family_id, ms.aa_intelligence_index_score as score, ms.cost_per_task_usd as cost_per_task_usd
+         from ${S}.plan_models pm
+         left join model_scores ms on ms.model_id = pm.model_id
+         where pm.plan_id = $1
+           and coalesce(pm.counts_as_current, true)
+         order by pm.model_family_id, pm.directly_selectable desc nulls last, ms.aa_intelligence_index_score desc nulls last
+       ) fam_best
+       order by fam_best.score desc nulls last
+       limit 1`,
+      [req.params.id]
+    );
+    plan.best_model_quality_score = best?.best_model_quality_score ?? null;
+    plan.best_model_cost_per_task_usd = best?.best_model_cost_per_task_usd ?? null;
     const modelAccess = await q(
       `select * from ${S}.plan_models
        where plan_id = $1
