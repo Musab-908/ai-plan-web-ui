@@ -310,6 +310,39 @@ app.get("/api/plans/:id", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ---------- Coding Agents (e.g. Claude Code, Codex, Kimi Code CLI) ----------
+// AGENT is a coding-agent product (brand_id links back to the same
+// companies/brands used elsewhere, when known — some agents like Opencode
+// have no owning brand in the catalogue and brand_id is null).
+// AGENT_MODEL_BENCHMARKS holds one row per agent+model(+config) combo, with
+// four score columns: the Artificial Analysis Coding Agent Index,
+// DeepSWE, Terminal-Bench v2, and SWE-Atlas-QnA. The UI is model-centric —
+// one flat table of agent-on-model results, no agent -> models drill-down —
+// so this is the only endpoint the client needs for that page.
+app.get("/api/agent-benchmarks", async (req, res, next) => {
+  try {
+    res.json(
+      await q(`
+        select
+          b.*,
+          a.name as agent_name,
+          a.agent_type,
+          a.brand_id as agent_brand_id,
+          br.name as agent_brand_name,
+          co.name as agent_company_name,
+          m.model_family_name,
+          m.provider_name
+        from ${S}.agent_model_benchmarks b
+        left join ${S}.agents a on a.agent_id = b.agent_id
+        left join ${S}.brands br on br.brand_id = a.brand_id
+        left join ${S}.companies co on co.company_id = br.company_id
+        left join ${S}.models m on m.model_id = b.model_id
+        order by b.model_name_raw, b.coding_agent_index_score desc nulls last
+      `)
+    );
+  } catch (e) { next(e); }
+});
+
 // ---------- Serve the built React client (production) ----------
 // In dev you still run `vite` separately with its proxy; this only kicks in
 // once client/dist exists, which happens on Render's build step.

@@ -138,6 +138,79 @@ th.sortable:hover { color: var(--accent); }
   margin-left: auto;
 }
 .filter-clear:hover { border-color: var(--badge-no-border); }
+/* Same look as .filter-clear but without the auto-margin, so it can sit
+   directly next to a dropdown instead of being pushed to the far right. */
+.filter-clear-inline {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--badge-no-text);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.filter-clear-inline:hover { border-color: var(--badge-no-border); }
+.filterbar-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-left: 4px;
+}
+
+/* ---- InfoTip: tap-to-open "i" bubble for explaining labels/columns ---- */
+.info-tip {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 5px;
+}
+.info-tip-btn {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--text-dim);
+  background: none;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-style: italic;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.info-tip-btn:hover,
+.info-tip-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.info-tip-bubble {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  max-width: 70vw;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  z-index: 30;
+  cursor: default;
+}
+/* Table headers are uppercase/bold by default; the bubble content inside
+   one shouldn't inherit that. */
+th .info-tip-bubble { text-transform: none; font-weight: 400; }
 
 /* ---- Rankings page: preset tabs + weight sliders ---- */
 .preset-tabs {

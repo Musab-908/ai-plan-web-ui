@@ -4,7 +4,7 @@ import {
   Dashboard, Companies, CompanyDetail, Providers, ProviderDetail,
   FamilyDetail, ModelsBrowse, ModelDetail, BenchmarksBrowse, BenchmarkDetail,
   BrandDetail, ProductDetail, PlanDetail, PlansBrowse, ComparePage,
-  Rankings,
+  Rankings, AgentsBrowse,
 } from "./pages";
 import { CompareProvider } from "./compareContext";
 import { PageMetaProvider, usePageMeta } from "./pageMetaContext";
@@ -30,6 +30,20 @@ function GlobalSearch() {
   const { data: models } = useApi("models");
   const { data: plans } = useApi("plans");
   const { data: benchmarks } = useApi("benchmarks");
+  const { data: agentBenchmarks } = useApi("agent-benchmarks");
+
+  // Coding agents have no detail route (the /agents page is a flat,
+  // model-centric table) — dedupe by agent name and just point matches at
+  // the browse page, same as "See all" elsewhere on that page.
+  const agents = useMemo(() => {
+    const byName = new Map();
+    (agentBenchmarks || []).forEach((b) => {
+      if (b.agent_name && !byName.has(b.agent_name)) {
+        byName.set(b.agent_name, { name: b.agent_name, sub: b.agent_company_name || b.agent_type || null });
+      }
+    });
+    return [...byName.values()];
+  }, [agentBenchmarks]);
 
   const results = useMemo(() => {
     const t = term.trim().toLowerCase();
@@ -61,8 +75,13 @@ function GlobalSearch() {
         out.push({ kind: "Benchmark", label: b.name, sub: b.category || null, href: `/benchmarks/${b.benchmark_id}` });
       }
     });
+    (agents || []).forEach((a) => {
+      if (a.name?.toLowerCase().includes(t)) {
+        out.push({ kind: "Agent", label: a.name, sub: a.sub, href: "/agents" });
+      }
+    });
     return out.slice(0, 8);
-  }, [term, companies, providers, models, plans, benchmarks]);
+  }, [term, companies, providers, models, plans, benchmarks, agents]);
 
   useEffect(() => {
     function onClickOutside(e) {
@@ -95,7 +114,7 @@ function GlobalSearch() {
         <div className="global-search-results">
           {results.length === 0 && <div className="global-search-empty">No matches</div>}
           {results.map((r) => (
-            <div className="global-search-result" key={r.kind + r.href} onClick={() => goTo(r.href)}>
+            <div className="global-search-result" key={r.kind + r.href + r.label} onClick={() => goTo(r.href)}>
               <span className="global-search-kind">{r.kind}</span>
               <span className="global-search-text">
                 <span className="global-search-label">{r.label}</span>
@@ -139,6 +158,7 @@ function Topbar({ theme, onToggleTheme }) {
         <Link to="/models">Models</Link>
         <Link to="/plans">Plans</Link>
         <Link to="/rankings">Rankings</Link>
+        <Link to="/agents">Coding Agents</Link>
         <Link to="/benchmarks">Benchmarks</Link>
       </nav>
 
@@ -189,6 +209,7 @@ export default function App() {
                 <Route path="/plans" element={<PlansBrowse />} />
                 <Route path="/plans/:id" element={<PlanDetail />} />
                 <Route path="/rankings" element={<Rankings />} />
+                <Route path="/agents" element={<AgentsBrowse />} />
                 <Route path="/compare" element={<ComparePage />} />
               </Routes>
             </div>

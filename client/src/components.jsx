@@ -1,5 +1,50 @@
 import { Link, useNavigate } from "react-router-dom";
-import { cloneElement, useState } from "react";
+import { cloneElement, useState, useRef, useEffect } from "react";
+
+// Small tap-to-open "i" info bubble for explaining ambiguous labels/column
+// headers. Click/tap toggles it (rather than hover-only) so it works the
+// same on touch devices as on desktop. Closes on outside click or Escape.
+// `text` can be a string or JSX (short explanations only — this isn't meant
+// to hold long-form content).
+export function InfoTip({ text, label = "More info" }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClickOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    function onKeyDown(e) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <span className="info-tip" ref={ref}>
+      <button
+        type="button"
+        className="info-tip-btn"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+      >
+        i
+      </button>
+      {open && (
+        <span className="info-tip-bubble" role="tooltip" onClick={(e) => e.stopPropagation()}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
 
 export function Status({ loading, error }) {
   if (loading) return <div className="loading">Loading…</div>;
