@@ -180,7 +180,8 @@ app.get("/api/plans", async (req, res, next) => {
         left join lateral (
           select coalesce(json_agg(t order by t.feature_category, t.feature_name), '[]'::json) as features
           from (
-            select distinct on (feature_name) feature_name, feature_category, supported, support_note
+            select distinct on (feature_name) feature_name, feature_category,
+              platform_current_supported as supported, platform_current_support_note as support_note
             from ${S}.plan_features
             where plan_id = p.plan_id
             order by feature_name, feature_category
@@ -296,7 +297,8 @@ app.get("/api/plans/:id", async (req, res, next) => {
       [req.params.id]
     );
     const features = await q(
-      `select distinct on (feature_name) *
+      `select distinct on (feature_name) *,
+         platform_current_supported as supported, platform_current_support_note as support_note
        from ${S}.plan_features
        where plan_id = $1
        order by feature_name, feature_category`,
