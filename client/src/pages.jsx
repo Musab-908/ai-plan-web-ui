@@ -6,9 +6,10 @@ import { useCompare } from "./compareContext";
 import { useSetPageMeta } from "./pageMetaContext";
 import { exportToCsv, exportToXlsx } from "./exportUtils";
 import {
-  PRESETS, PRESET_LABELS, VARIABLES, VARIABLE_META, MIN_WEIGHT, MAX_WEIGHT,
+  PRESETS, PRESET_LABELS, VARIABLES, VARIABLE_META, MIN_WEIGHT, MAX_WEIGHT, DEFAULT_WEIGHT,
   rankPlans, weightsToFractions,
-  createDefaultWeights, setWeight, isLastNonZero,
+  setWeight, isLastNonZero,
+  forceDisableFeatureCoverage, restoreFeatureCoverage,
 } from "./rankingUtils";
 
 // ---------------- Dashboard ----------------
@@ -132,18 +133,19 @@ function TopModelsLeaderboard() {
   );
 }
 
-// Top plans by Match Score (see RANK_PRESETS / bestModelScore / isFreePlan
-// further down this file — reused here so the dashboard preview and the
-// full Plans ranking stay in sync). Uses the "balanced" preset since the
-// dashboard doesn't expose a preset picker. Free plans, and plans missing a
-// price or a scored model, are excluded from ranking entirely.
+// Top plans by Match Score (see RANK_PRESETS / bestModelScore / isFreePlan /
+// featureCoverage further down this file — reused here so the dashboard
+// preview and the full Plans ranking stay in sync). Uses the "balanced"
+// preset since the dashboard doesn't expose a preset picker. Free plans, and
+// plans missing a price, a scored model, or any tracked features, are
+// excluded from ranking entirely.
 function TopPlansLeaderboard() {
   const { data, error, loading } = useApi("plans");
   const preset = RANK_PRESETS.balanced;
 
   const ranked = useMemo(() => {
     const eligible = (data || []).filter(
-      (p) => p.base_price_usd_monthly != null && !isFreePlan(p) && bestModelScore(p) != null
+      (p) => p.base_price_usd_monthly != null && !isFreePlan(p) && bestModelScore(p) != null && featureCoverage(p) != null
     );
     if (eligible.length === 0) return [];
     const scores = eligible.map(bestModelScore);
@@ -159,7 +161,7 @@ function TopPlansLeaderboard() {
       .map((p) => {
         const modelQuality = scoreRange === 0 ? 1 : (bestModelScore(p) - minScore) / scoreRange;
         const affordability = priceRange === 0 ? 1 : 1 - (Number(p.base_price_usd_monthly) - minPrice) / priceRange;
-        const rankScore = preset.w1 * modelQuality + preset.w2 * affordability;
+        const rankScore = preset.w1 * modelQuality + preset.w2 * affordability + preset.w3 * featureCoverage(p);
         return { ...p, __rankScore: rankScore };
       })
       .sort((a, b) => b.__rankScore - a.__rankScore)
@@ -174,8 +176,8 @@ function TopPlansLeaderboard() {
         <h2>Top Plans · Match Score</h2>
         <Link to="/plans" className="dash-panel-more">See all →</Link>
       </div>
-      <p className="dash-panel-note" title="Match Score blends how capable a plan's best accessible model is and how affordable the plan is, normalized 0-100% against the other eligible plans. Free plans and plans missing a price or a scored model aren't ranked.">
-        Blend of model quality &amp; price. Free plans excluded.
+      <p className="dash-panel-note" title="Match Score blends how capable a plan's best accessible model is, how affordable the plan is, and how much of its tracked feature set it supports, normalized 0-100% against the other eligible plans. Free plans and plans missing a price, a scored model, or any tracked features aren't ranked.">
+        Blend of model quality, price &amp; feature coverage. Free plans excluded.
       </p>
       <Status loading={loading} error={error} />
       {!loading && !error && ranked.length === 0 && <div className="empty">No rankable plans yet.</div>}
@@ -278,7 +280,7 @@ export function Dashboard() {
         Intelligence Index and Coding Agent Index scores sourced from{" "}
         <a href="https://artificialanalysis.ai/" target="_blank" rel="noopener noreferrer">
           Artificial Analysis
-        </a>. Match Score is a blend of model quality and plan price — see the Plans page for details.
+        </a>. Match Score is a blend of model quality, plan price &amp; feature coverage — see the Plans page for details.
       </p>
     </div>
   );
@@ -543,6 +545,18 @@ export function ModelsBrowse() {
             sortable: true,
             sortValue: (m) => (m.aa_intelligence_index_score != null ? Number(m.aa_intelligence_index_score) : null),
           },
+          {
+            key: "aa_cost_per_task_usd",
+            label: (
+              <>
+                Cost / task
+                <InfoTip text="Artificial Analysis' estimated cost (USD) to complete one task on this model. Lower is better." />
+              </>
+            ),
+            sortable: true,
+            sortValue: (m) => (m.aa_cost_per_task_usd != null ? Number(m.aa_cost_per_task_usd) : null),
+            render: (m) => (m.aa_cost_per_task_usd != null ? formatUsd(m.aa_cost_per_task_usd, 4) : "—"),
+          },
           sourceColumn((m) => m.evidence_url),
         ]}
         rows={filteredRows}
@@ -622,6 +636,7 @@ export function ModelDetail() {
             <KV pairs={[
               ["Status", data.model.status],
               ["AA Intelligence Index", aaIndex],
+              ["Cost / task", data.model.aa_cost_per_task_usd != null ? formatUsd(data.model.aa_cost_per_task_usd, 4) : null],
               ["vs Opus 4.8", data.model.aa_v4_1_vs_opus_4_8_pct != null ? <PctDiff value={data.model.aa_v4_1_vs_opus_4_8_pct} /> : null],
               ["vs GPT-5.6 Sol", data.model.aa_v4_1_vs_gpt_5_6_sol_pct != null ? <PctDiff value={data.model.aa_v4_1_vs_gpt_5_6_sol_pct} /> : null],
               ["vs Fable 5", data.model.aa_v4_1_vs_fable_5_pct != null ? <PctDiff value={data.model.aa_v4_1_vs_fable_5_pct} /> : null],
@@ -1181,19 +1196,37 @@ const EMPTY_FILTERS = {
   family: "",
 };
 
-// Weighted plan ranking: score = w1*model_quality + w2*affordability.
-// Only plans with a known price and at least one scored model are ranked;
-// everything else is excluded rather than scored as 0, since a missing
-// signal isn't the same as a bad one.
+// Weighted plan ranking: score = w1*model_quality + w2*affordability + w3*feature_coverage.
+// Only plans with a known price, at least one scored model, AND at least one
+// tracked feature are ranked; everything else is excluded rather than scored
+// as 0, since a missing signal isn't the same as a bad one.
 const RANK_PRESETS = {
-  value: { label: "Best Value", w1: 0.4, w2: 0.6 },
-  balanced: { label: "Balanced", w1: 0.5, w2: 0.5 },
-  capability: { label: "Best Capability", w1: 0.8, w2: 0.2 },
+  value: { label: "Best Value", w1: 0.35, w2: 0.5, w3: 0.15 },
+  balanced: { label: "Balanced", w1: 0.4, w2: 0.4, w3: 0.2 },
+  capability: { label: "Best Capability", w1: 0.65, w2: 0.15, w3: 0.2 },
+  features: { label: "Most Features", w1: 0.2, w2: 0.2, w3: 0.6 },
 };
 
 function bestModelScore(p) {
   const s = p.top_models?.[0]?.score;
   return s != null ? Number(s) : null;
+}
+
+// Fraction of this plan's *tracked* features (i.e. ones with a known
+// supported: true/false, not just absent from the data) that are supported.
+// Already 0-1 by construction, so unlike model score / price it doesn't need
+// min/max normalization against the eligible set. Returns null — rather than
+// 0 — when nothing is tracked, so callers can exclude it the same way they
+// exclude missing price/model data instead of unfairly scoring it as "no
+// features". Dashboard-only helper — the Plans table itself no longer shows
+// a feature-coverage column/basis picker (removed per request), but
+// Rankings and this leaderboard both still use feature coverage as a
+// ranking input.
+function featureCoverage(p) {
+  const tracked = (p.features || []).filter((f) => typeof f.supported === "boolean");
+  if (tracked.length === 0) return null;
+  const supported = tracked.filter((f) => f.supported).length;
+  return supported / tracked.length;
 }
 
 export function PlansBrowse() {
@@ -1580,11 +1613,68 @@ function formatUsd(n, digits = 2) {
 
 export function Rankings() {
   const { data, error, loading } = useApi("plans");
+  // Feature coverage is scored against ALL tracked features by default —
+  // selectedFeatures starts empty and gets auto-filled with every feature
+  // name the first time the plan data loads (see featuresInitRef below), so
+  // the checkboxes come up all-checked rather than all-unchecked.
+  const [selectedFeatures, setSelectedFeatures] = useState([]); // array of feature_name strings
   const [selectedAudiences, setSelectedAudiences] = useState([]);
   const [showFormula, setShowFormula] = useState(false);
+  const hasFeatures = selectedFeatures.length > 0;
 
-  const [weights, setWeights] = useState(createDefaultWeights);
+  // Weights start matching the "Best value" preset (the tab that's active
+  // by default) rather than a separate default — feature_coverage included,
+  // since features are selected by default too.
+  const [weights, setWeights] = useState(() => PRESETS.best_value);
   const [activePreset, setActivePreset] = useState("best_value"); // preset key | "custom"
+
+  const allFeatures = useMemo(() => {
+    const byName = new Map();
+    (data || []).forEach((p) => {
+      (p.features || []).forEach((f) => {
+        if (!byName.has(f.feature_name)) byName.set(f.feature_name, f);
+      });
+    });
+    return [...byName.values()].sort((a, b) => a.feature_name.localeCompare(b.feature_name));
+  }, [data]);
+
+  // One-time auto-select of every feature once the data's loaded. Runs only
+  // once (featuresInitRef guards it) so a later deliberate "clear all" by
+  // the user sticks instead of being immediately refilled.
+  const featuresInitRef = useRef(false);
+  useEffect(() => {
+    if (!featuresInitRef.current && allFeatures.length > 0) {
+      setSelectedFeatures(allFeatures.map((f) => f.feature_name));
+      featuresInitRef.current = true;
+    }
+  }, [allFeatures]);
+
+  // Remembers feature_coverage's weight immediately before it gets
+  // force-disabled, so re-selecting a feature restores it rather than
+  // always resetting to the default weight (spec 4 allows either choice —
+  // this implementation picks "restore prior value, default if there isn't
+  // one yet").
+  const lastFeatureCoverageWeight = useRef(DEFAULT_WEIGHT);
+
+  // Keep feature_coverage's availability in sync with the feature filter.
+  // Force it to 0 (and gray its input) while nothing's selected — clearing
+  // every feature turns the factor off entirely, same as before; restore it
+  // (and re-enable) once a feature is selected again. Skipped on the very
+  // first render so it doesn't clobber the "Best value" starting weights
+  // above before the auto-select effect has had a chance to run.
+  const skipFirstSync = useRef(true);
+  useEffect(() => {
+    if (skipFirstSync.current) {
+      skipFirstSync.current = false;
+      return;
+    }
+    setWeights((prev) => {
+      if (hasFeatures) return restoreFeatureCoverage(prev, lastFeatureCoverageWeight.current);
+      if (Number(prev.feature_coverage) !== 0) lastFeatureCoverageWeight.current = prev.feature_coverage;
+      return forceDisableFeatureCoverage(prev);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasFeatures]);
 
   const audienceOptions = useMemo(() => {
     const cats = new Set((data || []).map((p) => audienceCategory(p.audience)));
@@ -1593,7 +1683,11 @@ export function Rankings() {
 
   const selectPreset = (key) => {
     setActivePreset(key);
-    setWeights(PRESETS[key]);
+    // A preset always sets all 3 weights explicitly, including
+    // feature_coverage — but if no features are selected right now, the
+    // sync effect above will immediately force it back to 0 on the next
+    // render, same as any other change to feature_coverage.
+    setWeights(hasFeatures ? PRESETS[key] : { ...PRESETS[key], feature_coverage: 0 });
   };
 
   const handleWeightChange = (key, newValue) => {
@@ -1608,8 +1702,11 @@ export function Rankings() {
   );
 
   // Base candidate set: excludes free plans entirely (per request — a $0
-  // plan doesn't meaningfully compete on price/cost-per-task), and applies
-  // the individual/organization filter.
+  // plan doesn't meaningfully compete on price), and applies the
+  // individual/organization filter. Selected features are NOT a hard filter
+  // here (per request) — every plan stays in the ranked list even if it
+  // doesn't support the selected features; feature_coverage only affects
+  // each plan's score via the weighted ranking below.
   const filteredPlans = useMemo(() => {
     return (data || []).filter((p) => {
       if (isFreePlan(p)) return false;
@@ -1622,8 +1719,8 @@ export function Rankings() {
   // set) every time the filter changes, per spec — and live on every
   // dropdown change since `fractions` is derived straight from state.
   const rankedRows = useMemo(
-    () => rankPlans(filteredPlans, fractions).map((p, i) => ({ ...p, __rank: i + 1 })),
-    [filteredPlans, fractions]
+    () => rankPlans(filteredPlans, fractions, selectedFeatures).map((p, i) => ({ ...p, __rank: i + 1 })),
+    [filteredPlans, fractions, selectedFeatures]
   );
 
   const columns = useMemo(() => {
@@ -1668,45 +1765,83 @@ export function Rankings() {
           ),
       },
       {
-        key: "cost_per_task",
+        key: "feature_coverage",
         label: (
           <>
-            Cost / task
-            <InfoTip text="Estimated cost per task (USD) for that same best-accessible model — i.e. the model behind the Quality score column, not a plan-wide average. Lower is better. Plans where this is missing or $0 are ranked below plans that have real cost data." />
+            Feature coverage
+            <InfoTip text="Share of the features you selected above that this plan supports (supported ÷ selected). Shows '—' until you select at least one feature — it isn't a hard filter, just part of the weighted score." />
           </>
         ),
-        render: (p) =>
-          p.__noCostData ? (
-            <span className="badge no" title="This plan's best accessible model has no cost-per-task data (missing or $0), so it's ranked at the bottom rather than scored.">
-              No cost data
-            </span>
-          ) : p.best_model_cost_per_task_usd != null ? (
-            formatUsd(p.best_model_cost_per_task_usd, 4)
-          ) : (
-            "—"
-          ),
+        render: (p) => (hasFeatures ? `${Math.round(p.__featureCoverage * 100)}%` : "—"),
       },
       {
         key: "rank_score",
         label: (
           <>
             Rank score
-            <InfoTip text="The final weighted blend (0–1, higher is better) of price, quality, and cost-per-task, using the weights set below. See 'How is Rank score calculated?' for the exact formula." />
+            <InfoTip text="The final weighted blend (0–1, higher is better) of price, quality, and feature coverage, using the weights set below. Cost-per-task is shown for reference but is not part of this formula. See 'How is Rank score calculated?' for the exact formula." />
           </>
         ),
         render: (p) => (p.__rankScore != null ? p.__rankScore.toFixed(3) : "—"),
       },
     ];
     return base;
-  }, []);
+  }, [hasFeatures]);
 
   return (
     <div>
       <h1>Rankings</h1>
       <p className="subtitle">
-        Set how much each factor matters below. Free plans are excluded from ranking. Weights are
-        client-side only and reset when you leave this page.
+        Select the features that matter to you, then set how much each factor matters. Plans aren't excluded
+        for missing a feature — feature coverage is scored, not filtered. Free plans are excluded from
+        ranking. Weights are client-side only and reset when you leave this page.
       </p>
+
+      <div className="rankings-feature-panel">
+        <div className="rankings-feature-panel-head">
+          <h3>Feature coverage</h3>
+          <CheckboxDropdown
+            label="Features"
+            options={allFeatures}
+            selected={selectedFeatures}
+            onChange={setSelectedFeatures}
+            getKey={(f) => f.feature_name}
+            getLabel={(f) => f.feature_name}
+          />
+        </div>
+        <p className="rankings-feature-panel-desc">
+          All features are included by default — plans are scored on what share of the selected features
+          they support. Narrow the list above to focus on ones you actually care about, or clear it entirely
+          to turn this factor off.
+        </p>
+        {hasFeatures && selectedFeatures.length < allFeatures.length && (
+          <div className="rankings-feature-chips">
+            {selectedFeatures.map((name) => (
+              <span className="rankings-feature-chip" key={name}>
+                {name}
+                <button
+                  onClick={() => setSelectedFeatures((prev) => prev.filter((n) => n !== name))}
+                  aria-label={`Remove ${name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <button className="filter-clear-inline" onClick={() => setSelectedFeatures(allFeatures.map((f) => f.feature_name))}>
+              Select all
+            </button>
+          </div>
+        )}
+        {hasFeatures && (
+          <button
+            className="filter-clear-inline"
+            style={{ marginTop: selectedFeatures.length < allFeatures.length ? 8 : 10 }}
+            onClick={() => setSelectedFeatures([])}
+          >
+            Clear all (turns feature coverage off)
+          </button>
+        )}
+      </div>
 
       <div className="filterbar">
         <CheckboxDropdown
@@ -1737,33 +1872,71 @@ export function Rankings() {
         <span className={`preset-tab preset-tab-custom ${activePreset === "custom" ? "active" : ""}`}>Custom</span>
       </div>
 
+      <div className="weight-distribution">
+        {VARIABLES.map((key) => {
+          const pct = totalWeight > 0 ? ((Number(weights[key]) || 0) / totalWeight) * 100 : 0;
+          return <span key={key} className="weight-distribution-segment" data-var={key} style={{ width: `${pct}%` }} />;
+        })}
+      </div>
+      <div className="weight-distribution-legend">
+        {VARIABLES.map((key) => {
+          const pct = totalWeight > 0 ? Math.round(((Number(weights[key]) || 0) / totalWeight) * 100) : 0;
+          return (
+            <span className="weight-distribution-legend-item" key={key}>
+              <span className="weight-distribution-swatch" data-var={key} />
+              {VARIABLE_META[key].label}: {pct}%
+            </span>
+          );
+        })}
+      </div>
+
       <div className="importance-grid">
         {VARIABLES.map((key) => {
           const meta = VARIABLE_META[key];
-          const currentValue = Number(weights[key]) || 0;
+          const isFeatureCov = key === "feature_coverage";
+          const forceDisabled = isFeatureCov && !hasFeatures;
+          const currentValue = forceDisabled ? 0 : Number(weights[key]) || 0;
           const lastNonZero = isLastNonZero(weights, key);
           const pct = totalWeight > 0 ? Math.round((currentValue / totalWeight) * 100) : 0;
-          const title = lastNonZero ? "At least one variable must stay above 0." : undefined;
+          const title = forceDisabled
+            ? "Select at least one feature above to weight feature coverage."
+            : lastNonZero
+            ? "At least one variable must stay above 0."
+            : undefined;
           return (
-            <label className="importance-field" key={key} title={title}>
+            <label className={`importance-field ${forceDisabled ? "disabled" : ""}`} key={key} title={title}>
               <span className="importance-label">
-                {meta.label} <span className="importance-hint">({meta.hint})</span>
+                <span>
+                  {meta.label}
+                  <InfoTip text={meta.help} />
+                </span>
+                <span className="importance-pct">{pct}%</span>
               </span>
               <span className="importance-input-row">
+                <input
+                  type="range"
+                  min={MIN_WEIGHT}
+                  max={MAX_WEIGHT}
+                  step={1}
+                  value={currentValue}
+                  disabled={forceDisabled}
+                  onChange={(e) => handleWeightChange(key, e.target.value)}
+                />
                 <input
                   type="number"
                   min={MIN_WEIGHT}
                   max={MAX_WEIGHT}
                   step={1}
                   value={currentValue}
+                  disabled={forceDisabled}
                   onChange={(e) => handleWeightChange(key, e.target.value)}
                 />
-                <span className="importance-pct">{pct}%</span>
               </span>
             </label>
           );
         })}
       </div>
+      <p className="rankings-slider-hint">Higher = more weight. Tap the ⓘ next to each factor for details.</p>
 
       <button type="button" className="rank-formula-trigger" onClick={() => setShowFormula(true)}>
         How is Rank score calculated?
@@ -1778,23 +1951,27 @@ export function Rankings() {
             <div className="rank-formula-body">
               <p className="rank-formula-eq">
                 Rank score = w<sub>price</sub>&nbsp;×&nbsp;priceScore + w<sub>quality</sub>&nbsp;×&nbsp;qualityScore
-                {" "}+ w<sub>cost</sub>&nbsp;×&nbsp;costScore
+                {" "}+ w<sub>features</sub>&nbsp;×&nbsp;featureCoverage
               </p>
               <ul>
                 <li>
                   Each <strong>weight</strong> (w) is the value you set for that variable, divided by the sum of
-                  all three values — e.g. price 8, quality 5, cost 8 (sum 21) gives price a weight of
-                  8/21 ≈ 38%.
+                  all three values — e.g. price 8, quality 5, features 2 (sum 15) gives price a weight of
+                  8/15 ≈ 53%.
                 </li>
                 <li>
-                  <strong>priceScore</strong>, <strong>qualityScore</strong>, and <strong>costScore</strong> are
-                  each normalized 0–1 (min–max) against the other eligible plans shown here — price and cost are
-                  inverted so cheaper scores higher.
+                  <strong>priceScore</strong> and <strong>qualityScore</strong> are each normalized 0–1 (min–max)
+                  against the other eligible plans shown here — price is inverted so cheaper scores higher.
                 </li>
                 <li>
-                  Plans missing a scored model are excluded from scoring and listed at the bottom. Plans with a
-                  scored model but no usable cost-per-task figure (missing or $0) are also pushed to the bottom,
-                  ranked above the no-model-data group.
+                  <strong>featureCoverage</strong> = supported selected features ÷ total selected features for
+                  that plan, already 0–1.
+                </li>
+                <li>
+                  Cost-per-task is shown in the table for reference but is not part of this formula.
+                </li>
+                <li>
+                  Plans missing a scored model are excluded from scoring and listed at the bottom.
                 </li>
                 <li>Free plans are excluded from ranking entirely.</li>
               </ul>

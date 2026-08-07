@@ -242,12 +242,50 @@ th .info-tip-bubble { text-transform: none; font-weight: 400; }
 .preset-tab-custom:hover { border-color: var(--border); }
 
 /* ---- Rankings page: 5-level importance dropdowns ---- */
+.weight-distribution {
+  display: flex;
+  height: 10px;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+}
+.weight-distribution-segment {
+  height: 100%;
+  transition: width 0.15s ease;
+}
+.weight-distribution-segment[data-var="price"] { background: #f0a860; }
+.weight-distribution-segment[data-var="model_quality"] { background: #6a9fff; }
+.weight-distribution-segment[data-var="feature_coverage"] { background: #b58aff; }
+.weight-distribution-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.weight-distribution-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.weight-distribution-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.weight-distribution-swatch[data-var="price"] { background: #f0a860; }
+.weight-distribution-swatch[data-var="model_quality"] { background: #6a9fff; }
+.weight-distribution-swatch[data-var="feature_coverage"] { background: #b58aff; }
+
 .importance-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 12px 24px;
+  gap: 16px 24px;
   margin-bottom: 16px;
-  padding: 12px 16px;
+  padding: 16px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -266,6 +304,9 @@ th .info-tip-bubble { text-transform: none; font-weight: 400; }
 .importance-label {
   font-size: 12px;
   color: var(--text);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
 }
 .importance-hint {
   color: var(--text-dim);
@@ -274,7 +315,15 @@ th .info-tip-bubble { text-transform: none; font-weight: 400; }
 .importance-input-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+.importance-field input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.importance-field input[type="range"]:disabled {
+  cursor: not-allowed;
 }
 .importance-field input[type="number"] {
   background: var(--bg);
@@ -283,7 +332,8 @@ th .info-tip-bubble { text-transform: none; font-weight: 400; }
   border-radius: 6px;
   padding: 6px 8px;
   font-size: 13px;
-  width: 64px;
+  width: 48px;
+  text-align: center;
 }
 .importance-field input[type="number"]:disabled {
   cursor: not-allowed;
@@ -292,7 +342,64 @@ th .info-tip-bubble { text-transform: none; font-weight: 400; }
   font-size: 12px;
   color: var(--text-dim);
   min-width: 34px;
+  text-align: right;
 }
+.rankings-slider-hint {
+  margin: 0 0 16px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ---- Rankings page: feature-coverage selector panel ---- */
+.rankings-feature-panel {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.rankings-feature-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.rankings-feature-panel-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.rankings-feature-panel-desc {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.rankings-feature-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.rankings-feature-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+  font-size: 12px;
+}
+.rankings-feature-chip button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px;
+}
+.rankings-feature-chip button:hover { color: var(--badge-no-text); }
 
 /* ---- Rankings page: formula popup trigger + overlay ---- */
 .rank-formula-trigger {
